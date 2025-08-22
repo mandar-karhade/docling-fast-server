@@ -17,7 +17,6 @@ docker run -d \
   -e OPENAI_API_KEY=your_openai_api_key_here \
   -e OMP_NUM_THREADS=4 \
   -e UVICORN_WORKERS=2 \
-  -v ./models:/home/appuser/.EasyOCR \
   legendofmk/docling-cpu-api:latest
 ```
 
@@ -45,8 +44,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OMP_NUM_THREADS=${OMP_NUM_THREADS:-8}
       - UVICORN_WORKERS=${UVICORN_WORKERS:-8}
-    volumes:
-      - ./models:/home/appuser/.EasyOCR
+
     restart: unless-stopped
     deploy:
       resources:
@@ -96,14 +94,7 @@ spec:
           requests:
             cpu: "8"
             memory: "4Gi"
-        volumeMounts:
-        - name: models-volume
-          mountPath: /home/appuser/.EasyOCR
-      volumes:
-      - name: models-volume
-        persistentVolumeClaim:
-          claimName: models-pvc
-          claimName: output-pvc
+
 ```
 
 ## API Endpoints

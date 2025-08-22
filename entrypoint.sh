@@ -21,11 +21,7 @@ echo "   UVICORN_WORKERS: $UVICORN_WORKERS"
 echo "   OpenAI API Key: ${OPENAI_API_KEY:0:10}..."
 echo ""
 
-# Create necessary directories if they don't exist
-mkdir -p /home/appuser/.EasyOCR/model
-
-# Set proper permissions
-chown -R appuser:appuser /home/appuser/.EasyOCR
+# EasyOCR will create its cache directory automatically
 
 echo "🔧 Starting Uvicorn server..."
 echo "   Host: 0.0.0.0"

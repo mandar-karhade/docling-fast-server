@@ -55,7 +55,7 @@ curl -X POST \
 ## 🔧 Features
 
 - **CPU-Optimized**: No GPU required, runs efficiently on CPU-only infrastructure
-- **EasyOCR Integration**: Automatic text recognition with persistent model caching
+- **EasyOCR Integration**: Automatic text recognition with on-demand model downloading
 - **Multiple Output Formats**: JSON, Markdown, HTML, and plain text
 - **Concurrent Processing**: Supports multiple simultaneous requests
 - **Automatic Compression**: Gzip compression for bandwidth optimization
@@ -168,7 +168,7 @@ docker compose up -d
 - Non-root user execution
 - Environment variable configuration and validation
 - Resource limits and reservations
-- Persistent volume mounting for model caching
+- Stateless operation suitable for short-lived deployments
 - Entrypoint script for robust startup control
 
 ## 🤝 Contributing

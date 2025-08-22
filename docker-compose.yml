@@ -7,8 +7,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OMP_NUM_THREADS=${OMP_NUM_THREADS:-4}  # Cores per process (default: 4 for local)
       - UVICORN_WORKERS=${UVICORN_WORKERS:-2}  # Number of worker processes (default: 2 for local)
-    volumes:
-      - ./models:/home/appuser/.EasyOCR  # Persist EasyOCR models
+
     restart: unless-stopped
     # Use configurable resources
     deploy:

@@ -53,7 +53,7 @@ tests/
 test_pdfs/
 **pdf*
 
-# Models (large files, mounted as volume)
+# Models (EasyOCR cache - temporary files)
 models/
 
 # Local development

@@ -62,7 +62,7 @@ requirements-local.txt
 # Documentation (not needed in Docker image)
 docs/
 
-# Models (these are mounted as volumes)
+# Models (EasyOCR cache - will be created at runtime)
 models/
 
 # Temporary files
