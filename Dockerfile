@@ -17,7 +17,10 @@ RUN pip install uv
 # Copy requirements first for better caching
 COPY requirements.txt .
 
-# Install Python dependencies using uv
+# Install CPU-only PyTorch first to avoid CUDA dependencies
+RUN uv pip install --system torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cpu
+
+# Install other dependencies
 RUN uv pip install --system -r requirements.txt
 
 # Copy application code
@@ -25,6 +28,13 @@ COPY . .
 
 # Create non-root user for security
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+
+# Create EasyOCR cache directory for the user with proper structure
+RUN mkdir -p /home/appuser/.EasyOCR/model && chown -R appuser:appuser /home/appuser/.EasyOCR
+
+# Make entrypoint script executable
+RUN chmod +x /app/entrypoint.sh
+
 USER appuser
 
 # Expose port
@@ -34,5 +44,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# Start the application
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+# Use entrypoint script for better startup control
+ENTRYPOINT ["/app/entrypoint.sh"]

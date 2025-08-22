@@ -1,0 +1,72 @@
+# Environment variables
+.env
+.env.local
+.env.*.local
+env.local
+env.production
+
+# Virtual environments
+.venv
+venv/
+ENV/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Test files and data
+tests/
+test_pdfs/
+**pdf*
+
+# Models (large files, mounted as volume)
+models/
+
+# Local development
+# requirements-local.txt (keeping this in repo for development)
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+.pytest_cache/
+
+# Docker
+.dockerignore
+
+# GitHub Actions (if not needed in repo)
+.github/

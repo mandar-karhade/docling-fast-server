@@ -2,16 +2,15 @@
 .git
 .gitignore
 
-# Documentation
-*.md
-
 # Development files
 .env
 .env.local
 .env.*.local
+env.local
+env.production
 
-# Python
-__pycache__
+# Python cache and build artifacts
+__pycache__/
 *.py[cod]
 *$py.class
 *.so
@@ -43,6 +42,7 @@ env/
 .idea/
 *.swp
 *.swo
+*~
 
 # OS
 .DS_Store
@@ -50,21 +50,33 @@ Thumbs.db
 
 # Logs
 *.log
+logs/
 
-# Test files
+# Test files and local development
 test_*.py
 *_test.py
 tests/
+test_pdfs/
+requirements-local.txt
+
+# Documentation (not needed in Docker image)
+docs/
+
+# Models (these are mounted as volumes)
+models/
 
 # Temporary files
 *.tmp
 *.temp
 .cache/
-
-# Docker
-Dockerfile*
-docker-compose*
-.dockerignore
+.pytest_cache/
 
 # GitHub Actions
 .github/
+
+# Keep these files for Docker image:
+# - main.py
+# - requirements.txt
+# - Dockerfile
+# - docker-compose.yml
+# - README.md and other documentation

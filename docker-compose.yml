@@ -2,13 +2,23 @@ services:
   docling-api:
     build: .
     ports:
-      - "8000:8000"
+      - "8001:8000"
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OMP_NUM_THREADS=4
+      - OMP_NUM_THREADS=${OMP_NUM_THREADS:-4}  # Cores per process (default: 4 for local)
+      - UVICORN_WORKERS=${UVICORN_WORKERS:-2}  # Number of worker processes (default: 2 for local)
     volumes:
-      - ./output:/app/output
+      - ./models:/home/appuser/.EasyOCR  # Persist EasyOCR models
     restart: unless-stopped
+    # Use configurable resources
+    deploy:
+      resources:
+        limits:
+          cpus: '${CPU_LIMIT:-8}'    # CPU cores limit (default: 8 for local)
+          memory: ${MEMORY_LIMIT:-4G}   # Memory limit (default: 4G for local)
+        reservations:
+          cpus: '${CPU_RESERVATION:-2}'     # Minimum CPU cores (default: 2 for local)
+          memory: ${MEMORY_RESERVATION:-2G}    # Minimum memory (default: 2G for local)
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
