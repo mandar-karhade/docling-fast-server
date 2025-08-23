@@ -5,7 +5,7 @@ from pathlib import Path
 from datetime import datetime
 import json
 from rq import get_current_job
-from main import process_pdf, get_output, update_job, load_jobs, save_jobs
+from src.services.pdf_processor import pdf_processor
 
 def process_pdf_task(pdf_data: bytes, filename: str):
     """
@@ -30,11 +30,11 @@ def process_pdf_task(pdf_data: bytes, filename: str):
         
         # Process the PDF
         print(f"📄 Processing {filename} with RQ job ID: {rq_job.id}")
-        doc = process_pdf(pdf_path, temp_path)
+        doc = pdf_processor.process_pdf(pdf_path, temp_path)
         
         # Generate results
         pdf_stem = pdf_path.stem
-        results = get_output(doc, pdf_stem, "ocr")
+        results = pdf_processor.get_output(doc, pdf_stem, "ocr")
         
         if results:
             return {
