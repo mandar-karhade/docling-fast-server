@@ -21,7 +21,15 @@ echo "   UVICORN_WORKERS: $UVICORN_WORKERS"
 echo "   OpenAI API Key: ${OPENAI_API_KEY:0:10}..."
 echo ""
 
-# EasyOCR will create its cache directory automatically
+# Pre-download Docling artifacts if not already cached
+echo "📥 Checking Docling artifacts..."
+if [ ! -d "/home/appuser/.cache/huggingface/hub" ] || [ -z "$(ls -A /home/appuser/.cache/huggingface/hub 2>/dev/null)" ]; then
+    echo "   Downloading Docling artifacts (this may take several minutes)..."
+    python -c "from docling.document_converter import DocumentConverter; from docling.datamodel.base_models import InputFormat; from docling.datamodel.pipeline_options import PdfPipelineOptions; converter = DocumentConverter(format_options={InputFormat.PDF: PdfPipelineOptions()}); print('Docling artifacts pre-downloaded')"
+    echo "   ✅ Docling artifacts downloaded successfully"
+else
+    echo "   ✅ Docling artifacts already cached"
+fi
 
 echo "🔧 Starting Uvicorn server..."
 echo "   Host: 0.0.0.0"

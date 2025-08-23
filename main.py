@@ -88,8 +88,10 @@ def process_pdf(pdf_path: Path, output_dir: Path) -> Dict[str, Any]:
     """Process PDF using locally installed docling with the same options"""
     print(f"📄 Processing {pdf_path.name} with local docling")
     
-    # Create document converter with PDF format options
+    # Create document converter with PDF format options and artifacts path
+    artifacts_path = "/home/appuser/.cache/huggingface/hub"
     doc_converter = DocumentConverter(
+        artifacts_path=artifacts_path,
         format_options={
             InputFormat.PDF: PdfFormatOption(
                 pipeline_options=get_pdf_pipeline_options(),

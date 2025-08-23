@@ -32,6 +32,9 @@ RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 # Create EasyOCR cache directory for the user with proper structure
 RUN mkdir -p /home/appuser/.EasyOCR/model && chown -R appuser:appuser /home/appuser/.EasyOCR
 
+# Pre-download all Docling artifacts to avoid timeout on first request
+RUN su appuser -c "python -c \"from docling.document_converter import DocumentConverter; from docling.datamodel.base_models import InputFormat; from docling.datamodel.pipeline_options import PdfPipelineOptions; converter = DocumentConverter(format_options={InputFormat.PDF: PdfPipelineOptions()}); print('Docling artifacts pre-downloaded')\""
+
 # Make entrypoint script executable
 RUN chmod +x /app/entrypoint.sh
 
