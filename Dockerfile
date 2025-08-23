@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
     git \
+    unzip \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv
@@ -39,7 +40,6 @@ RUN mkdir -p /home/appuser/.EasyOCR/model && chown -R appuser:appuser /home/appu
 
 # Make scripts executable
 RUN chmod +x /app/entrypoint.sh
-RUN chmod +x /app/download_models.sh
 
 USER appuser
 
