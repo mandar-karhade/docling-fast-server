@@ -64,7 +64,14 @@ def get_accelerator_options():
     )
 
 def get_pdf_pipeline_options():
+    # Set EasyOCR to use cached models
+    artifacts_path = os.getenv('ARTIFACTS_PATH', '/workspace')
+    os.environ['EASYOCR_MODULE_PATH'] = artifacts_path
+    
     return PdfPipelineOptions(
+                # Artifacts path for cached models
+                artifacts_path=artifacts_path,
+                
                 # Accelerator options 
                 accelerator_options = get_accelerator_options(),
                 
@@ -88,10 +95,8 @@ def process_pdf(pdf_path: Path, output_dir: Path) -> Dict[str, Any]:
     """Process PDF using locally installed docling with the same options"""
     print(f"📄 Processing {pdf_path.name} with local docling")
     
-    # Create document converter with PDF format options and artifacts path
-    artifacts_path = "/home/appuser/.cache/huggingface/hub"
+    # Create document converter with PDF format options
     doc_converter = DocumentConverter(
-        artifacts_path=artifacts_path,
         format_options={
             InputFormat.PDF: PdfFormatOption(
                 pipeline_options=get_pdf_pipeline_options(),

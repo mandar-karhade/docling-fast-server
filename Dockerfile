@@ -29,14 +29,17 @@ COPY . .
 # Create non-root user for security
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 
+# Create workspace directory for persistent storage
+RUN mkdir -p /workspace && chown -R appuser:appuser /workspace
+
 # Create EasyOCR cache directory for the user with proper structure
 RUN mkdir -p /home/appuser/.EasyOCR/model && chown -R appuser:appuser /home/appuser/.EasyOCR
 
-# Pre-download all Docling artifacts to avoid timeout on first request
-RUN su appuser -c "python -c \"from docling.document_converter import DocumentConverter; from docling.datamodel.base_models import InputFormat; from docling.datamodel.pipeline_options import PdfPipelineOptions; converter = DocumentConverter(format_options={InputFormat.PDF: PdfPipelineOptions()}); print('Docling artifacts pre-downloaded')\""
+# Note: Models will be downloaded at runtime to /workspace for persistent storage
 
-# Make entrypoint script executable
+# Make scripts executable
 RUN chmod +x /app/entrypoint.sh
+RUN chmod +x /app/download_models.sh
 
 USER appuser
 
