@@ -1,0 +1,16 @@
+services:
+  docling-api:
+    image: legendofmk/docling-cpu-api:latest
+    ports:
+      - "8000:8000"  # RunPod expects port 8000
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OMP_NUM_THREADS=${OMP_NUM_THREADS:-8}
+      - UVICORN_WORKERS=${UVICORN_WORKERS:-8}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s

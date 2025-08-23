@@ -132,6 +132,10 @@ from fastapi.responses import StreamingResponse
 from fastapi.middleware.gzip import GZipMiddleware
 import tempfile
 import shutil
+import uuid
+import asyncio
+from datetime import datetime
+from typing import Dict, Optional
 
 app = FastAPI(
     title="Docling API",
@@ -141,6 +145,67 @@ app = FastAPI(
 
 # Add compression middleware
 app.add_middleware(GZipMiddleware, minimum_size=1000)  # Compress responses > 1KB
+
+# Job management
+jobs: Dict[str, Dict] = {}
+
+def create_job() -> str:
+    """Create a new job and return job ID"""
+    job_id = str(uuid.uuid4())
+    jobs[job_id] = {
+        "id": job_id,
+        "status": "pending",
+        "created_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.utcnow().isoformat(),
+        "progress": 0,
+        "result": None,
+        "error": None
+    }
+    return job_id
+
+def update_job(job_id: str, status: str, progress: int = None, result: Dict = None, error: str = None):
+    """Update job status and information"""
+    if job_id in jobs:
+        jobs[job_id]["status"] = status
+        jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
+        if progress is not None:
+            jobs[job_id]["progress"] = progress
+        if result is not None:
+            jobs[job_id]["result"] = result
+        if error is not None:
+            jobs[job_id]["error"] = error
+
+async def process_pdf_async(job_id: str, pdf_path: Path, temp_path: Path):
+    """Process PDF asynchronously and update job status"""
+    try:
+        update_job(job_id, "processing", 10)
+        
+        # Process the PDF
+        doc = process_pdf(pdf_path, temp_path)
+        update_job(job_id, "processing", 50)
+        
+        # Generate results
+        pdf_stem = pdf_path.stem
+        results = get_output(doc, pdf_stem, "ocr")
+        update_job(job_id, "processing", 90)
+        
+        if results:
+            update_job(job_id, "completed", 100, {
+                "status": "success",
+                "filename": pdf_path.name,
+                "files": results
+            })
+        else:
+            update_job(job_id, "failed", error="Failed to create output files")
+            
+    except Exception as e:
+        update_job(job_id, "failed", error=str(e))
+    finally:
+        # Clean up temporary directory
+        try:
+            shutil.rmtree(temp_path)
+        except:
+            pass
 
 @app.get("/health")
 async def health_check():
@@ -198,6 +263,80 @@ async def process_pdf_ocr(file: UploadFile = File(...)):
     except Exception as e:
         print(f"❌ Error processing PDF: {e}")
         raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
+
+@app.post("/ocr/async")
+async def process_pdf_ocr_async(file: UploadFile = File(...)):
+    """Start async PDF processing and return job ID"""
+    if not file.filename.lower().endswith('.pdf'):
+        raise HTTPException(status_code=400, detail="File must be a PDF")
+    
+    # Create job
+    job_id = create_job()
+    
+    # Create temporary directory for processing
+    temp_dir = tempfile.mkdtemp()
+    temp_path = Path(temp_dir)
+    
+    try:
+        # Save uploaded file
+        pdf_path = temp_path / file.filename
+        with open(pdf_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        
+        # Start async processing
+        asyncio.create_task(process_pdf_async(job_id, pdf_path, temp_path))
+        
+        return {
+            "status": "accepted",
+            "job_id": job_id,
+            "message": "PDF processing started. Use /jobs/{job_id} to check status."
+        }
+        
+    except Exception as e:
+        update_job(job_id, "failed", error=str(e))
+        raise HTTPException(status_code=500, detail=f"Failed to start processing: {str(e)}")
+
+@app.get("/jobs/{job_id}")
+async def get_job_status(job_id: str):
+    """Get job status and results"""
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    job = jobs[job_id]
+    return {
+        "job_id": job_id,
+        "status": job["status"],
+        "progress": job["progress"],
+        "created_at": job["created_at"],
+        "updated_at": job["updated_at"],
+        "result": job["result"],
+        "error": job["error"]
+    }
+
+@app.get("/jobs")
+async def list_jobs():
+    """List all jobs"""
+    return {
+        "jobs": [
+            {
+                "job_id": job_id,
+                "status": job["status"],
+                "progress": job["progress"],
+                "created_at": job["created_at"],
+                "updated_at": job["updated_at"]
+            }
+            for job_id, job in jobs.items()
+        ]
+    }
+
+@app.delete("/jobs/{job_id}")
+async def delete_job(job_id: str):
+    """Delete a job"""
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    del jobs[job_id]
+    return {"status": "deleted", "job_id": job_id}
 
 @app.post("/serialize")
 async def serialize_endpoint():
