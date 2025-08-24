@@ -33,11 +33,12 @@ RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 # Create workspace directory for persistent storage
 RUN mkdir -p /workspace && chown -R appuser:appuser /workspace
 
-# Create EasyOCR cache directory for the user with proper structure
-RUN mkdir -p /home/appuser/.EasyOCR/model && mkdir -p /home/appuser/.EasyOCR/temp && chown -R appuser:appuser /home/appuser/.EasyOCR
-
 # Set EasyOCR model path to workspace for persistent storage
 ENV EASYOCR_MODULE_PATH=/workspace
+ENV EASYOCR_HOME=/workspace
+
+# Create symbolic link to ensure EasyOCR uses workspace path
+RUN ln -sf /workspace /home/appuser/.EasyOCR
 
 # Ensure warmup_files directory exists and has proper permissions
 RUN mkdir -p /app/warmup_files && chown -R appuser:appuser /app/warmup_files
