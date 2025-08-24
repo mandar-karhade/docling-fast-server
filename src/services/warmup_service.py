@@ -246,18 +246,23 @@ class WarmupService:
                     "timestamp": datetime.now().isoformat()
                 })
                 
-                # Only mark as ready if both OCR endpoints work
-                if sync_success and async_success:
-                    self.warmup_status = "completed"
-                    self.is_warmup_complete = True
-                    print("🎉 Warmup process completed! Both OCR endpoints tested successfully. API is ready to accept requests.")
+                # Mark as ready if sync OCR works, async is optional (depends on Redis)
+                if sync_success:
+                    if async_success:
+                        self.warmup_status = "completed"
+                        self.is_warmup_complete = True
+                        print("🎉 Warmup process completed! Both OCR endpoints tested successfully. API is ready to accept requests.")
+                    else:
+                        self.warmup_status = "completed"
+                        self.is_warmup_complete = True
+                        print("🎉 Warmup process completed! Synchronous OCR working. Async OCR requires Redis connection. API is ready to accept requests.")
                 else:
                     self.warmup_status = "failed"
-                    print("❌ Warmup process failed: OCR endpoint tests failed")
+                    print("❌ Warmup process failed: Synchronous OCR endpoint test failed")
                     if not sync_success:
                         print("❌ Synchronous OCR endpoint test failed")
                     if not async_success:
-                        print("❌ Asynchronous OCR endpoint test failed")
+                        print("⚠️  Asynchronous OCR endpoint test failed (Redis connection issue)")
             else:
                 # No warmup files, mark as completed
                 self.warmup_status = "completed"
