@@ -213,10 +213,56 @@ class WarmupService:
                         "timestamp": datetime.now().isoformat()
                     })
             
-            # Mark warmup as completed after processing files
-            self.warmup_status = "completed"
-            self.is_warmup_complete = True
-            print("🎉 Warmup process completed! API is ready to accept requests.")
+            # Test API endpoints with the first warmup file
+            if warmup_files:
+                test_file = warmup_files[0]
+                print(f"🧪 Testing API endpoints with {test_file.name}...")
+                
+                # Test synchronous OCR
+                sync_success = self._test_sync_ocr(test_file)
+                
+                # Test Redis connection
+                redis_success = self._test_redis_connection()
+                
+                # Test asynchronous OCR
+                async_success = self._test_async_ocr(test_file)
+                
+                # Store endpoint test results
+                self.warmup_results.append({
+                    "file": "sync_ocr_test",
+                    "status": "success" if sync_success else "failed",
+                    "timestamp": datetime.now().isoformat()
+                })
+                
+                self.warmup_results.append({
+                    "file": "async_ocr_test",
+                    "status": "success" if async_success else "failed",
+                    "timestamp": datetime.now().isoformat()
+                })
+                
+                self.warmup_results.append({
+                    "file": "redis_test",
+                    "status": "success" if redis_success else "failed",
+                    "timestamp": datetime.now().isoformat()
+                })
+                
+                # Only mark as ready if both OCR endpoints work
+                if sync_success and async_success:
+                    self.warmup_status = "completed"
+                    self.is_warmup_complete = True
+                    print("🎉 Warmup process completed! Both OCR endpoints tested successfully. API is ready to accept requests.")
+                else:
+                    self.warmup_status = "failed"
+                    print("❌ Warmup process failed: OCR endpoint tests failed")
+                    if not sync_success:
+                        print("❌ Synchronous OCR endpoint test failed")
+                    if not async_success:
+                        print("❌ Asynchronous OCR endpoint test failed")
+            else:
+                # No warmup files, mark as completed
+                self.warmup_status = "completed"
+                self.is_warmup_complete = True
+                print("🎉 Warmup process completed! (No warmup files to test)")
             
             self.end_time = datetime.now()
             

@@ -53,10 +53,7 @@ Thumbs.db
 logs/
 
 # Test files and local development
-test_*.py
-*_test.py
 tests/
-test_pdfs/
 test_pdf/
 requirements-local.txt
 
@@ -74,11 +71,3 @@ models/
 
 # GitHub Actions
 .github/
-
-# Keep these files for Docker image:
-# - main.py
-# - requirements.txt
-# - Dockerfile
-# - docker-compose.yml
-# - README.md and other documentation
-# - src/ (explicitly included)

@@ -9,6 +9,10 @@ router = APIRouter()
 @router.get("/health")
 async def health_check():
     """Health check endpoint with warmup status"""
+    # Start warmup if not already started
+    if warmup_service.warmup_status == "not_started":
+        warmup_service.start_warmup()
+    
     # Check if warmup is complete
     is_ready = warmup_service.is_ready()
     
