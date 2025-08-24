@@ -21,22 +21,3 @@ async def health_check():
         "openai_key_available": bool(os.getenv('OPENAI_API_KEY')),
         "warmup": warmup_status
     }
-
-
-@router.get("/warmup_completed")
-async def warmup_completed():
-    """Check if warmup process is completed"""
-    return {
-        "warmup_complete": warmup_service.is_ready(),
-        "status": warmup_service.get_status()
-    }
-
-
-@router.post("/warmup/start")
-async def start_warmup():
-    """Manually start warmup process"""
-    warmup_service.start_warmup()
-    return {
-        "message": "Warmup process started",
-        "status": warmup_service.get_status()
-    }

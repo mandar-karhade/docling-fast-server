@@ -14,7 +14,20 @@ from src.models.job import Job, JobUpdate
 class QueueManager:
     def __init__(self):
         self.redis_url = os.getenv('UPSTASH_REDIS_URL', 'redis://localhost:6379/0')
-        self.redis_conn = Redis.from_url(self.redis_url)
+        
+        # Configure Redis connection with SSL support for Upstash
+        if self.redis_url.startswith('rediss://'):
+            # SSL connection - configure properly
+            self.redis_conn = Redis.from_url(
+                self.redis_url,
+                ssl=True,
+                ssl_cert_reqs=None,  # Don't verify SSL certificate
+                decode_responses=True
+            )
+        else:
+            # Non-SSL connection
+            self.redis_conn = Redis.from_url(self.redis_url)
+        
         self.pdf_queue = Queue('pdf_processing', connection=self.redis_conn)
         
         # Job management with batch-based file persistence

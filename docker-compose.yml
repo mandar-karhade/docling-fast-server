@@ -1,70 +1,22 @@
 services:
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "8851:6379"
-    volumes:
-      - redis_data:/data
-    command: redis-server --appendonly yes
-    restart: unless-stopped
-
   docling-api:
     build: .
     ports:
-      - "8850:8000"
+      - "8000:8000"
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - HF_HOME=/workspace
-      - HF_DATASETS_CACHE=/workspace
       - OMP_NUM_THREADS=${OMP_NUM_THREADS:-4}  # Cores per process (default: 4 for local)
       - UVICORN_WORKERS=${UVICORN_WORKERS:-4}  # Number of worker processes (default: 4 for API handling)
-      - REDIS_URL=redis://redis:6379/0
+      - UPSTASH_REDIS_URL=${UPSTASH_REDIS_URL}
     volumes:
       - workspace_data:/workspace
-    depends_on:
-      - redis
     restart: unless-stopped
-    # Use configurable resources
-    deploy:
-      resources:
-        limits:
-          cpus: '${CPU_LIMIT:-8}'    # CPU cores limit (default: 8 for local)
-          memory: ${MEMORY_LIMIT:-4G}   # Memory limit (default: 4G for local)
-        reservations:
-          cpus: '${CPU_RESERVATION:-2}'     # Minimum CPU cores (default: 2 for local)
-          memory: ${MEMORY_RESERVATION:-2G}    # Minimum memory (default: 2G for local)
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 30s
-
-  rq-worker:
-    build: .
-    entrypoint: []
-    command: rq worker --url redis://redis:6379/0 pdf_processing
-    environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - HF_HOME=/workspace
-      - HF_DATASETS_CACHE=/workspace
-      - OMP_NUM_THREADS=${OMP_NUM_THREADS:-4}  # Reduced for multiple workers
-      - REDIS_URL=redis://redis:6379/0
-    volumes:
-      - workspace_data:/workspace
-    depends_on:
-      - redis
-    restart: unless-stopped
-    deploy:
-      replicas: ${RQ_WORKERS:-1}  # Scale based on environment variable
-      resources:
-        limits:
-          cpus: '${CPU_LIMIT:-4}'    # CPU per worker
-          memory: ${MEMORY_LIMIT:-4G}   # Memory per worker
-        reservations:
-          cpus: '${CPU_RESERVATION:-2}'     # Minimum CPU per worker
-          memory: ${MEMORY_RESERVATION:-2G}    # Minimum memory per worker
+      start_period: 40s
 
 volumes:
   workspace_data:
-  redis_data:

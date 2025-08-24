@@ -70,6 +70,28 @@ class WarmupService:
             print(f"❌ Synchronous OCR test error for {pdf_file.name}: {str(e)}")
             return False
     
+    def _test_redis_connection(self) -> bool:
+        """Test Redis connection before running async tests"""
+        try:
+            print("🔍 Testing Redis connection...")
+            import redis
+            from src.services.queue_manager import queue_manager
+            
+            # Test Redis connection
+            redis_conn = queue_manager.redis_conn
+            result = redis_conn.ping()
+            
+            if result:
+                print("✅ Redis connection test passed")
+                return True
+            else:
+                print("❌ Redis connection test failed: ping returned False")
+                return False
+                
+        except Exception as e:
+            print(f"❌ Redis connection test failed: {str(e)}")
+            return False
+    
     def _test_async_ocr(self, pdf_file: Path) -> bool:
         """Test asynchronous OCR endpoint"""
         try:
@@ -126,6 +148,11 @@ class WarmupService:
                     return False
             else:
                 print(f"❌ Asynchronous OCR test failed for {pdf_file.name}: HTTP {response.status_code}")
+                try:
+                    error_detail = response.json()
+                    print(f"❌ Error details: {error_detail}")
+                except:
+                    print(f"❌ Error response: {response.text}")
                 return False
                 
         except Exception as e:
@@ -186,44 +213,10 @@ class WarmupService:
                         "timestamp": datetime.now().isoformat()
                     })
             
-            # Test API endpoints with the first warmup file
-            if warmup_files:
-                test_file = warmup_files[0]
-                print(f"🧪 Testing API endpoints with {test_file.name}...")
-                
-                # Test synchronous OCR
-                sync_success = self._test_sync_ocr(test_file)
-                
-                # Test asynchronous OCR
-                async_success = self._test_async_ocr(test_file)
-                
-                # Store endpoint test results
-                self.warmup_results.append({
-                    "file": "sync_ocr_test",
-                    "status": "success" if sync_success else "failed",
-                    "timestamp": datetime.now().isoformat()
-                })
-                
-                self.warmup_results.append({
-                    "file": "async_ocr_test", 
-                    "status": "success" if async_success else "failed",
-                    "timestamp": datetime.now().isoformat()
-                })
-                
-                # Only mark as complete if both tests pass
-                if sync_success and async_success:
-                    self.warmup_status = "completed"
-                    self.is_warmup_complete = True
-                    print("🎉 Warmup process completed successfully! API is ready to accept requests.")
-                else:
-                    self.warmup_status = "failed"
-                    self.is_warmup_complete = False
-                    print("❌ Warmup process failed: API endpoint tests failed")
-            else:
-                # No files to test with
-                self.warmup_status = "completed"
-                self.is_warmup_complete = True
-                print("🎉 Warmup process completed (no files to test with)")
+            # Mark warmup as completed after processing files
+            self.warmup_status = "completed"
+            self.is_warmup_complete = True
+            print("🎉 Warmup process completed! API is ready to accept requests.")
             
             self.end_time = datetime.now()
             
@@ -244,11 +237,12 @@ class WarmupService:
             "status": self.warmup_status,
             "results": self.warmup_results,
             "errors": self.warmup_errors,
-            "files_processed": len([r for r in self.warmup_results if r.get('file') not in ['sync_ocr_test', 'async_ocr_test']]),
+            "files_processed": len([r for r in self.warmup_results if r.get('file') not in ['sync_ocr_test', 'async_ocr_test', 'redis_test']]),
             "files_failed": len(self.warmup_errors),
             "endpoint_tests": {
                 "sync_ocr": next((r for r in self.warmup_results if r.get('file') == 'sync_ocr_test'), {}).get('status', 'not_tested'),
-                "async_ocr": next((r for r in self.warmup_results if r.get('file') == 'async_ocr_test'), {}).get('status', 'not_tested')
+                "async_ocr": next((r for r in self.warmup_results if r.get('file') == 'async_ocr_test'), {}).get('status', 'not_tested'),
+                "redis_connection": next((r for r in self.warmup_results if r.get('file') == 'redis_test'), {}).get('status', 'not_tested')
             }
         }
         

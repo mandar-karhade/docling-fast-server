@@ -30,11 +30,6 @@ echo "   OpenAI API Key: ${OPENAI_API_KEY:0:10}..."
 echo "   Redis URL: ${UPSTASH_REDIS_URL:0:20}..."
 echo ""
 
-# Set Hugging Face environment variables for Docling
-echo "🔧 Configuring Hugging Face cache paths..."
-export HF_HOME="/workspace"
-export HF_DATASETS_CACHE="/workspace"
-
 echo "✅ Models will be downloaded automatically by Docling"
 echo "🔧 Starting services..."
 echo "   - RQ workers (pdf_processing queue)"
