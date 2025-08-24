@@ -57,24 +57,7 @@ echo "   Port: 8000"
 echo "   Workers: $UVICORN_WORKERS"
 echo ""
 
-# Start the API server with warmup process
-echo "🔥 Starting warmup process in background..."
-python -c "
-import asyncio
-import threading
-import time
-from src.services.warmup_service import warmup_service
-
-def start_warmup():
-    warmup_service.start_warmup()
-
-# Start warmup in background thread
-thread = threading.Thread(target=start_warmup, daemon=True)
-thread.start()
-print('Warmup process started in background')
-"
-
-echo "🚀 Starting Uvicorn server..."
+# Start the API server
 exec uvicorn main:app \
     --host 0.0.0.0 \
     --port 8000 \

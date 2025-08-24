@@ -5,16 +5,18 @@ Docling API - FastAPI Application
 API for processing PDFs using Docling with comprehensive multi-language OCR support
 """
 
+import threading
 from fastapi import FastAPI
 from fastapi.middleware.gzip import GZipMiddleware
 
 from src.routes import health, ocr, jobs, placeholder
+from src.services.warmup_service import warmup_service
 
 # Create FastAPI application
 app = FastAPI(
     title="Docling API",
     description="API for processing PDFs using Docling with comprehensive multi-language OCR support",
-    version="1.4.0"
+    version="1.4.3"
 )
 
 # Add compression middleware
@@ -25,6 +27,20 @@ app.include_router(health.router, tags=["health"])
 app.include_router(ocr.router, tags=["ocr"])
 app.include_router(jobs.router, tags=["jobs"])
 app.include_router(placeholder.router, tags=["placeholder"])
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Start warmup process when API starts"""
+    print("🚀 API starting up...")
+    
+    # Start warmup process in background thread
+    def start_warmup():
+        warmup_service.start_warmup()
+    
+    thread = threading.Thread(target=start_warmup, daemon=True)
+    thread.start()
+    print("🔥 Warmup process started in background")
 
 
 if __name__ == "__main__":

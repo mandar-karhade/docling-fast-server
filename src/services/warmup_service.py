@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Dict, List
 from datetime import datetime
 
-from src.services.ocr_service import OCRService
+from .pdf_processor import pdf_processor
 
 
 class WarmupService:
@@ -56,25 +56,36 @@ class WarmupService:
             
             print(f"📁 Found {len(warmup_files)} warmup files")
             
-            # Initialize OCR service (this will download models)
-            ocr_service = OCRService()
-            
             # Process each warmup file
             for i, pdf_file in enumerate(warmup_files, 1):
                 try:
                     print(f"🔄 Processing warmup file {i}/{len(warmup_files)}: {pdf_file.name}")
                     
-                    # Process the file
-                    result = ocr_service.process_pdf(str(pdf_file))
+                    # Create temporary directory for processing
+                    import tempfile
+                    import shutil
+                    temp_dir = tempfile.mkdtemp()
+                    temp_path = Path(temp_dir)
                     
-                    # Store result
-                    self.warmup_results.append({
-                        "file": pdf_file.name,
-                        "status": "success",
-                        "timestamp": datetime.now().isoformat()
-                    })
-                    
-                    print(f"✅ Warmup file {pdf_file.name} processed successfully")
+                    try:
+                        # Process the file using pdf_processor
+                        doc = pdf_processor.process_pdf(pdf_file, temp_path)
+                        
+                        # Store result
+                        self.warmup_results.append({
+                            "file": pdf_file.name,
+                            "status": "success",
+                            "timestamp": datetime.now().isoformat()
+                        })
+                        
+                        print(f"✅ Warmup file {pdf_file.name} processed successfully")
+                        
+                    finally:
+                        # Clean up temporary directory
+                        try:
+                            shutil.rmtree(temp_dir)
+                        except:
+                            pass
                     
                 except Exception as e:
                     error_msg = f"Error processing {pdf_file.name}: {str(e)}"
