@@ -1,6 +1,8 @@
 services:
   docling-api:
     build: .
+    env_file:
+      - env.local
     ports:
       - "8000:8000"
     environment:
