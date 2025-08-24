@@ -101,18 +101,25 @@ class WarmupService:
         """Test Redis connection before running async tests"""
         try:
             print("🔍 Testing Redis connection...")
-            import redis
-            from src.services.queue_manager import queue_manager
+            from upstash_redis import Redis
+            import os
             
-            # Test Redis connection
-            redis_conn = queue_manager.redis_conn
+            # Test Redis connection using Upstash Redis
+            redis_url = os.getenv('UPSTASH_REDIS_REST_URL')
+            redis_token = os.getenv('UPSTASH_REDIS_REST_TOKEN')
+            
+            if not redis_url or not redis_token:
+                print("❌ Redis connection test failed: Missing UPSTASH_REDIS_REST_URL or UPSTASH_REDIS_REST_TOKEN")
+                return False
+            
+            redis_conn = Redis(url=redis_url, token=redis_token)
             result = redis_conn.ping()
             
-            if result:
+            if result == "PONG":
                 print("✅ Redis connection test passed")
                 return True
             else:
-                print("❌ Redis connection test failed: ping returned False")
+                print("❌ Redis connection test failed: ping returned unexpected result")
                 return False
                 
         except Exception as e:

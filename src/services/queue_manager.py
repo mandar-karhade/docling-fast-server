@@ -5,7 +5,7 @@ import asyncio
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional
-from redis import Redis
+from upstash_redis import Redis
 from rq import Queue
 
 from src.models.job import Job, JobUpdate
@@ -13,22 +13,19 @@ from src.models.job import Job, JobUpdate
 
 class QueueManager:
     def __init__(self):
-        self.redis_url = os.getenv('UPSTASH_REDIS_URL', 'redis://localhost:6379/0')
+        # Use Upstash Redis REST API
+        self.redis_url = os.getenv('UPSTASH_REDIS_REST_URL')
+        self.redis_token = os.getenv('UPSTASH_REDIS_REST_TOKEN')
         
-        # Configure Redis connection with SSL support for Upstash
-        if self.redis_url.startswith('rediss://'):
-            # SSL connection - configure properly
-            self.redis_conn = Redis.from_url(
-                self.redis_url,
-                ssl=True,
-                ssl_cert_reqs=None,  # Don't verify SSL certificate
-                decode_responses=True
-            )
-        else:
-            # Non-SSL connection
-            self.redis_conn = Redis.from_url(self.redis_url)
+        if not self.redis_url or not self.redis_token:
+            raise ValueError("UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN are required")
         
-        self.pdf_queue = Queue('pdf_processing', connection=self.redis_conn)
+        # Create Upstash Redis client
+        self.redis_conn = Redis(url=self.redis_url, token=self.redis_token)
+        
+        # Note: RQ doesn't work directly with Upstash Redis HTTP client
+        # We'll need to handle async operations differently
+        self.pdf_queue = None  # RQ queue not available with HTTP client
         
         # Job management with batch-based file persistence
         self.jobs_dir = os.getenv('JOBS_DIR', './jobs')

@@ -7,4 +7,4 @@ docling==2.46.0
 deepsearch-toolkit==2.0.1
 psutil==6.1.0
 rq==1.15.1
-redis==5.0.1
+upstash-redis==1.4.0
