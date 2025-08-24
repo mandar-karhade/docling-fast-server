@@ -36,6 +36,9 @@ RUN mkdir -p /workspace && chown -R appuser:appuser /workspace
 # Create EasyOCR cache directory for the user with proper structure
 RUN mkdir -p /home/appuser/.EasyOCR/model && chown -R appuser:appuser /home/appuser/.EasyOCR
 
+# Ensure warmup_files directory exists and has proper permissions
+RUN mkdir -p /app/warmup_files && chown -R appuser:appuser /app/warmup_files
+
 # Note: Models will be downloaded at runtime to /workspace for persistent storage
 
 # Make scripts executable

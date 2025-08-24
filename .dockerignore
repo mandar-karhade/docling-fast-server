@@ -57,6 +57,7 @@ test_*.py
 *_test.py
 tests/
 test_pdfs/
+test_pdf/
 requirements-local.txt
 
 # Documentation (not needed in Docker image)
