@@ -60,7 +60,7 @@ async def process_pdf_ocr(file: UploadFile = File(...)):
 
 @router.post("/ocr/async")
 async def process_pdf_ocr_async(file: UploadFile = File(...)):
-    """Process PDF file asynchronously using RQ and return RQ job ID"""
+    """Process PDF file asynchronously using thread-based processing and return job ID"""
     if not file.filename.lower().endswith('.pdf'):
         raise HTTPException(status_code=400, detail="File must be a PDF")
     
@@ -68,7 +68,7 @@ async def process_pdf_ocr_async(file: UploadFile = File(...)):
         # Read file content
         file_content = await file.read()
         
-        # Submit job to RQ queue
+        # Submit job to thread-based queue
         from src.services.rq_tasks import process_pdf_task
         rq_job = queue_manager.enqueue_job(
             process_pdf_task,
@@ -80,7 +80,7 @@ async def process_pdf_ocr_async(file: UploadFile = File(...)):
         
         return {
             "status": "accepted",
-            "job_id": rq_job.id,  # Use RQ job ID as primary identifier
+            "job_id": rq_job.id,  # Use job ID as primary identifier
             "batch_id": queue_manager._get_current_batch_id(),
             "message": "PDF processing queued. Use /jobs/{job_id} to check status."
         }

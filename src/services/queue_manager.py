@@ -97,9 +97,19 @@ class QueueManager:
                         # Convert non-dict results to string
                         storage_job['result'] = str(storage_job['result'])
                 
-                # Handle args (convert bytes to strings)
+                # Handle args (convert bytes to strings and handle file content)
                 if 'args' in storage_job:
-                    storage_job['args'] = [str(arg) if isinstance(arg, bytes) else arg for arg in storage_job['args']]
+                    cleaned_args = []
+                    for arg in storage_job['args']:
+                        if isinstance(arg, bytes):
+                            # For file content, just store a placeholder
+                            if len(arg) > 1000:  # Large content (likely file)
+                                cleaned_args.append(f"<file_content_{len(arg)}_bytes>")
+                            else:
+                                cleaned_args.append(str(arg))
+                        else:
+                            cleaned_args.append(arg)
+                    storage_job['args'] = cleaned_args
                 
                 # Handle kwargs (convert bytes to strings)
                 if 'kwargs' in storage_job:
