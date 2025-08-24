@@ -349,13 +349,24 @@ class QueueManager:
         # Generate a job ID
         job_id = str(uuid.uuid4())
         
-        # Create job entry
+        # Create job entry with proper handling of bytes data
+        cleaned_args = []
+        for arg in args:
+            if isinstance(arg, bytes):
+                # For file content, just store a placeholder
+                if len(arg) > 1000:  # Large content (likely file)
+                    cleaned_args.append(f"<file_content_{len(arg)}_bytes>")
+                else:
+                    cleaned_args.append(str(arg))
+            else:
+                cleaned_args.append(arg)
+        
         job_data = {
             "id": job_id,
             "status": "queued",
             "created_at": datetime.utcnow().isoformat(),
             "updated_at": datetime.utcnow().isoformat(),
-            "args": [str(arg) for arg in args],
+            "args": cleaned_args,
             "kwargs": kwargs,
             "result": None,
             "logs": [],

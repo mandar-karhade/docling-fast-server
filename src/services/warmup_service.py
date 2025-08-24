@@ -71,6 +71,34 @@ class WarmupService:
             thread = threading.Thread(target=self._run_warmup, daemon=True)
             thread.start()
     
+    def check_timeout(self) -> bool:
+        """Check if warmup has timed out (15 minutes)"""
+        if not self.start_time:
+            return False
+        
+        duration = (datetime.now() - self.start_time).total_seconds()
+        return duration > 900  # 15 minutes
+    
+    def force_complete(self):
+        """Force complete warmup if it's taking too long"""
+        if self.warmup_status == "in_progress" and self.check_timeout():
+            print("⚠️  Warmup timed out, forcing completion")
+            self.warmup_status = "timeout"
+            self.warmup_errors.append({
+                "file": "warmup_process",
+                "error": "Warmup timed out after 15 minutes",
+                "timestamp": datetime.now().isoformat()
+            })
+            self.end_time = datetime.now()
+            
+            # Clean up lock file
+            try:
+                lock_file = Path("/tmp/warmup.lock")
+                if lock_file.exists():
+                    lock_file.unlink()
+            except:
+                pass
+    
     def _test_sync_ocr(self, pdf_file: Path) -> bool:
         """Test synchronous OCR endpoint"""
         try:
@@ -194,20 +222,73 @@ class WarmupService:
             return False
     
     def _run_warmup(self):
-        """Run warmup process"""
+        """Run warmup process with timeout protection"""
         try:
             print("🔥 Starting warmup process...")
             
-            # Get warmup files
-            warmup_files = self.get_warmup_files()
-            if not warmup_files:
-                print("⚠️  No warmup files found")
-                self.warmup_status = "no_files"
-                self.is_warmup_complete = True
-                self.end_time = datetime.now()
-                return
+            # Set timeout (15 minutes)
+            import signal
             
-            print(f"📁 Found {len(warmup_files)} warmup files")
+            def timeout_handler(signum, frame):
+                raise TimeoutError("Warmup process timed out after 15 minutes")
+            
+            # Set timeout for 15 minutes
+            signal.signal(signal.SIGALRM, timeout_handler)
+            signal.alarm(900)  # 15 minutes
+            
+            try:
+                self._run_warmup_internal()
+            finally:
+                # Cancel the alarm
+                signal.alarm(0)
+                
+        except TimeoutError as e:
+            print(f"❌ {str(e)}")
+            self.warmup_status = "timeout"
+            self.warmup_errors.append({
+                "file": "warmup_process",
+                "error": str(e),
+                "timestamp": datetime.now().isoformat()
+            })
+            self.end_time = datetime.now()
+            
+            # Clean up lock file
+            try:
+                lock_file = Path("/tmp/warmup.lock")
+                if lock_file.exists():
+                    lock_file.unlink()
+            except:
+                pass
+        except Exception as e:
+            print(f"❌ Warmup process failed: {str(e)}")
+            self.warmup_status = "failed"
+            self.warmup_errors.append({
+                "file": "warmup_process",
+                "error": str(e),
+                "timestamp": datetime.now().isoformat()
+            })
+            self.end_time = datetime.now()
+            
+            # Clean up lock file on failure too
+            try:
+                lock_file = Path("/tmp/warmup.lock")
+                if lock_file.exists():
+                    lock_file.unlink()
+            except:
+                pass
+    
+    def _run_warmup_internal(self):
+        """Internal warmup process implementation"""
+        # Get warmup files
+        warmup_files = self.get_warmup_files()
+        if not warmup_files:
+            print("⚠️  No warmup files found")
+            self.warmup_status = "no_files"
+            self.is_warmup_complete = True
+            self.end_time = datetime.now()
+            return
+        
+        print(f"📁 Found {len(warmup_files)} warmup files")
             
             # Process each warmup file to load models
             for i, pdf_file in enumerate(warmup_files, 1):
@@ -332,7 +413,27 @@ class WarmupService:
                 pass
     
     def get_status(self) -> Dict:
-        """Get current warmup status"""
+        """Get current warmup status with progress tracking"""
+        current_time = datetime.now()
+        
+        # Calculate progress
+        total_steps = 4  # 2 files + sync test + async test
+        completed_steps = len(self.warmup_results)
+        progress_percentage = min(100, int((completed_steps / total_steps) * 100)) if self.warmup_status == "in_progress" else 100
+        
+        # Calculate duration and estimate remaining time
+        duration = (current_time - self.start_time).total_seconds() if self.start_time else None
+        estimated_remaining = None
+        if duration and self.warmup_status == "in_progress" and completed_steps > 0:
+            avg_time_per_step = duration / completed_steps
+            remaining_steps = total_steps - completed_steps
+            estimated_remaining = avg_time_per_step * remaining_steps
+        
+        # Check for timeout (15 minutes max)
+        is_timed_out = False
+        if duration and duration > 900:  # 15 minutes
+            is_timed_out = True
+        
         status = {
             "warmup_complete": self.is_warmup_complete,
             "status": self.warmup_status,
@@ -340,6 +441,11 @@ class WarmupService:
             "errors": self.warmup_errors,
             "files_processed": len([r for r in self.warmup_results if r.get('file') not in ['sync_ocr_test', 'async_ocr_test', 'redis_test']]),
             "files_failed": len(self.warmup_errors),
+            "total_steps": total_steps,
+            "completed_steps": completed_steps,
+            "progress_percentage": progress_percentage,
+            "current_step": self._get_current_step(),
+            "is_timed_out": is_timed_out,
             "endpoint_tests": {
                 "sync_ocr": next((r for r in self.warmup_results if r.get('file') == 'sync_ocr_test'), {}).get('status', 'not_tested'),
                 "async_ocr": next((r for r in self.warmup_results if r.get('file') == 'async_ocr_test'), {}).get('status', 'not_tested'),
@@ -353,10 +459,37 @@ class WarmupService:
         if self.end_time:
             status["end_time"] = self.end_time.isoformat()
             if self.start_time:
-                duration = (self.end_time - self.start_time).total_seconds()
-                status["duration_seconds"] = duration
+                status["duration_seconds"] = (self.end_time - self.start_time).total_seconds()
+        elif duration:
+            status["duration_seconds"] = duration
+            status["estimated_remaining_seconds"] = estimated_remaining
         
         return status
+    
+    def _get_current_step(self) -> str:
+        """Get current step description"""
+        if self.warmup_status == "not_started":
+            return "Not started"
+        elif self.warmup_status == "completed":
+            return "Completed"
+        elif self.warmup_status == "failed":
+            return "Failed"
+        
+        # Count completed steps
+        completed_steps = len(self.warmup_results)
+        
+        if completed_steps == 0:
+            return "Processing warmup files..."
+        elif completed_steps == 1:
+            return "Processing test1.pdf..."
+        elif completed_steps == 2:
+            return "Processing test2.pdf..."
+        elif completed_steps == 3:
+            return "Testing sync OCR endpoint..."
+        elif completed_steps == 4:
+            return "Testing async OCR endpoint..."
+        else:
+            return "Finalizing..."
     
     def is_ready(self) -> bool:
         """Check if API is ready to accept requests"""
