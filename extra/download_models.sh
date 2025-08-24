@@ -8,7 +8,7 @@ set -e
 echo "🚀 Starting model download process..."
 
 # Set default artifacts path
-ARTIFACTS_PATH=${ARTIFACTS_PATH:-/workspace}
+ARTIFACTS_PATH=${ARTIFACTS_PATH:-/home/appuser/.EasyOCR}
 
 echo "📥 Downloading EasyOCR models to $ARTIFACTS_PATH..."
 

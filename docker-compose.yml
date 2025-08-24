@@ -9,7 +9,7 @@ services:
       - UVICORN_WORKERS=${UVICORN_WORKERS:-4}  # Number of worker processes (default: 4 for API handling)
       - UPSTASH_REDIS_URL=${UPSTASH_REDIS_URL}
     volumes:
-      - workspace_data:/workspace
+      - workspace_data:/home/appuser/.EasyOCR
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]

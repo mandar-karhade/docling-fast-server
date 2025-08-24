@@ -30,20 +30,13 @@ COPY . .
 # Create non-root user for security
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 
-# Create workspace directory for persistent storage
-RUN mkdir -p /workspace && chown -R appuser:appuser /workspace
-
-# Set EasyOCR model path to workspace for persistent storage
-ENV EASYOCR_MODULE_PATH=/workspace
-ENV EASYOCR_HOME=/workspace
-
-# Create symbolic link to ensure EasyOCR uses workspace path
-RUN ln -sf /workspace /home/appuser/.EasyOCR
+# Create EasyOCR directory for persistent storage
+RUN mkdir -p /home/appuser/.EasyOCR && chown -R appuser:appuser /home/appuser/.EasyOCR
 
 # Ensure warmup_files directory exists and has proper permissions
 RUN mkdir -p /app/warmup_files && chown -R appuser:appuser /app/warmup_files
 
-# Note: Models will be downloaded at runtime to /workspace for persistent storage
+# Note: Models will be downloaded at runtime to /home/appuser/.EasyOCR for persistent storage
 
 # Make scripts executable
 RUN chmod +x /app/entrypoint.sh
