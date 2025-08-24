@@ -80,16 +80,37 @@ class QueueManager:
         jobs_file = self._get_jobs_file_path()
         
         try:
-            # Create a simplified version for storage (remove large objects)
+            # Create a simplified version for storage (remove large objects and non-serializable types)
             storage_jobs = {}
             for job_id, job in self.jobs.items():
                 storage_job = job.copy()
-                # Remove large objects that can cause JSON issues
+                
+                # Handle result object
                 if 'result' in storage_job and storage_job['result']:
-                    result = storage_job['result'].copy()
-                    if 'files' in result and 'converted_doc' in result['files']:
-                        result['files']['converted_doc'] = '<removed_large_object>'
-                    storage_job['result'] = result
+                    if isinstance(storage_job['result'], dict):
+                        result = storage_job['result'].copy()
+                        # Remove large objects that can cause JSON issues
+                        if 'files' in result and 'converted_doc' in result['files']:
+                            result['files']['converted_doc'] = '<removed_large_object>'
+                        storage_job['result'] = result
+                    else:
+                        # Convert non-dict results to string
+                        storage_job['result'] = str(storage_job['result'])
+                
+                # Handle args (convert bytes to strings)
+                if 'args' in storage_job:
+                    storage_job['args'] = [str(arg) if isinstance(arg, bytes) else arg for arg in storage_job['args']]
+                
+                # Handle kwargs (convert bytes to strings)
+                if 'kwargs' in storage_job:
+                    cleaned_kwargs = {}
+                    for key, value in storage_job['kwargs'].items():
+                        if isinstance(value, bytes):
+                            cleaned_kwargs[key] = str(value)
+                        else:
+                            cleaned_kwargs[key] = value
+                    storage_job['kwargs'] = cleaned_kwargs
+                
                 storage_jobs[job_id] = storage_job
             
             with open(jobs_file, 'w') as f:
@@ -211,6 +232,24 @@ class QueueManager:
                 
             self._save_jobs()
             print(f"🔧 Updated job {job_id}: status={update.status}, active={update.active}, waiting={update.waiting}")
+        else:
+            print(f"❌ Job {job_id} not found in jobs dictionary")
+
+    def update_job_status(self, job_id: str, status: str, active: bool = False, waiting: bool = False, result=None, error=None):
+        """Update job status (simplified version for thread-based processing)"""
+        if job_id in self.jobs:
+            # Update job data
+            self.jobs[job_id].update({
+                "status": status,
+                "active": active,
+                "waiting": waiting,
+                "result": result,
+                "error": error,
+                "updated_at": datetime.utcnow().isoformat()
+            })
+            
+            self._save_jobs()
+            print(f"🔧 Updated job {job_id}: status={status}, active={active}, waiting={waiting}")
         else:
             print(f"❌ Job {job_id} not found in jobs dictionary")
 
