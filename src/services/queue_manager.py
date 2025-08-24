@@ -231,47 +231,46 @@ class QueueManager:
         return self.jobs
 
     def get_queue_status(self) -> Dict:
-        """Get RQ queue status and statistics"""
+        """Get queue status and statistics (simulated since RQ doesn't work with HTTP Redis)"""
         try:
+            # Count jobs by status
+            total_jobs = len(self.jobs)
+            completed_jobs = len([j for j in self.jobs.values() if j.get('status') == 'completed'])
+            failed_jobs = len([j for j in self.jobs.values() if j.get('status') == 'failed'])
+            processing_jobs = len([j for j in self.jobs.values() if j.get('status') == 'processing'])
+            queued_jobs = len([j for j in self.jobs.values() if j.get('status') == 'queued'])
+            
             # Get queue statistics
             queue_stats = {
                 "queue_name": "pdf_processing",
-                "total_jobs": len(self.pdf_queue),
-                "workers": len(self.pdf_queue.connection.smembers('rq:workers')),
-                "failed_jobs": len(self.pdf_queue.failed_job_registry),
-                "started_jobs": len(self.pdf_queue.started_job_registry),
-                "deferred_jobs": len(self.pdf_queue.deferred_job_registry),
-                "scheduled_jobs": len(self.pdf_queue.scheduled_job_registry),
+                "total_jobs": total_jobs,
+                "completed_jobs": completed_jobs,
+                "failed_jobs": failed_jobs,
+                "processing_jobs": processing_jobs,
+                "queued_jobs": queued_jobs,
+                "workers": 1,  # Single worker since we're using threads
             }
             
-            # Get worker information
-            workers = []
-            try:
-                worker_names = self.pdf_queue.connection.smembers('rq:workers')
-                for worker_name in worker_names:
-                    worker_name_str = worker_name.decode()
-                    workers.append({
-                        "name": worker_name_str,
-                        "state": "active",
-                        "current_job": "",
-                        "last_heartbeat": ""
-                    })
-            except Exception as e:
-                print(f"Error getting worker info: {e}")
-                workers = []
+            # Get worker information (simulated)
+            workers = [{
+                "name": "thread-worker-1",
+                "state": "active",
+                "current_job": "",
+                "last_heartbeat": datetime.utcnow().isoformat()
+            }]
             
             # Get recent jobs
             recent_jobs = []
-            for job in self.pdf_queue.get_jobs()[:10]:  # Last 10 jobs
+            sorted_jobs = sorted(self.jobs.items(), key=lambda x: x[1].get('created_at', ''), reverse=True)
+            for job_id, job in sorted_jobs[:10]:  # Last 10 jobs
                 recent_jobs.append({
-                    "job_id": job.id,
-                    "status": job.get_status(),
-                    "created_at": job.created_at.isoformat() if job.created_at else None,
-                    "started_at": job.started_at.isoformat() if job.started_at else None,
-                    "ended_at": job.ended_at.isoformat() if job.ended_at else None,
-                    "result": str(job.result)[:100] + "..." if job.result and len(str(job.result)) > 100 else job.result,
-                    "exc_info": job.exc_info,
-                    "filename": job.meta.get('filename', 'Unknown') if job.meta else 'Unknown'
+                    "job_id": job_id,
+                    "status": job.get('status', 'unknown'),
+                    "created_at": job.get('created_at'),
+                    "updated_at": job.get('updated_at'),
+                    "result": str(job.get('result', ''))[:100] + "..." if job.get('result') and len(str(job.get('result'))) > 100 else job.get('result'),
+                    "error": job.get('error'),
+                    "filename": job.get('args', ['Unknown'])[1] if len(job.get('args', [])) > 1 else 'Unknown'
                 })
             
             return {
@@ -289,12 +288,62 @@ class QueueManager:
             }
 
     def get_rq_job(self, job_id: str):
-        """Get RQ job by ID"""
-        return self.pdf_queue.fetch_job(job_id)
+        """Get job by ID (simulated since RQ doesn't work with HTTP Redis)"""
+        return self.get_job(job_id)
 
     def enqueue_job(self, func, *args, **kwargs):
-        """Enqueue a job to RQ"""
-        return self.pdf_queue.enqueue(func, *args, **kwargs)
+        """Enqueue a job (simulated since RQ doesn't work with HTTP Redis)"""
+        import uuid
+        import threading
+        import time
+        
+        # Generate a job ID
+        job_id = str(uuid.uuid4())
+        
+        # Create job entry
+        job_data = {
+            "id": job_id,
+            "status": "queued",
+            "created_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat(),
+            "args": [str(arg) for arg in args],
+            "kwargs": kwargs,
+            "result": None,
+            "logs": [],
+            "active": False,
+            "waiting": True
+        }
+        
+        # Add to jobs dictionary
+        self.jobs[job_id] = job_data
+        self._save_jobs()
+        
+        # Start processing in background thread
+        def process_job():
+            try:
+                # Update status to processing
+                self.update_job_status(job_id, "processing", active=True, waiting=False)
+                
+                # Execute the function
+                result = func(*args, **kwargs)
+                
+                # Update status to completed
+                self.update_job_status(job_id, "completed", active=False, waiting=False, result=result)
+                
+            except Exception as e:
+                # Update status to failed
+                self.update_job_status(job_id, "failed", active=False, waiting=False, error=str(e))
+        
+        # Start processing thread
+        thread = threading.Thread(target=process_job, daemon=True)
+        thread.start()
+        
+        # Return a mock job object
+        class MockJob:
+            def __init__(self, job_id):
+                self.id = job_id
+        
+        return MockJob(job_id)
 
 
 # Global queue manager instance
