@@ -1,6 +1,9 @@
 import os
 import asyncio
 import threading
+import tempfile
+import shutil
+import requests
 from pathlib import Path
 from typing import Dict, List
 from datetime import datetime
@@ -17,6 +20,7 @@ class WarmupService:
         self.warmup_errors = []
         self.start_time = None
         self.end_time = None
+        self.api_base_url = "http://localhost:8000"
         
     def get_warmup_files(self) -> List[Path]:
         """Get list of PDF files in warmup directory"""
@@ -40,6 +44,94 @@ class WarmupService:
         thread = threading.Thread(target=self._run_warmup, daemon=True)
         thread.start()
     
+    def _test_sync_ocr(self, pdf_file: Path) -> bool:
+        """Test synchronous OCR endpoint"""
+        try:
+            print(f"🧪 Testing synchronous OCR with {pdf_file.name}...")
+            
+            # Create temporary file for testing
+            with open(pdf_file, 'rb') as f:
+                files = {'file': (pdf_file.name, f, 'application/pdf')}
+                response = requests.post(f"{self.api_base_url}/ocr", files=files, timeout=60)
+            
+            if response.status_code == 200:
+                result = response.json()
+                if result.get('status') == 'success':
+                    print(f"✅ Synchronous OCR test passed for {pdf_file.name}")
+                    return True
+                else:
+                    print(f"❌ Synchronous OCR test failed for {pdf_file.name}: {result}")
+                    return False
+            else:
+                print(f"❌ Synchronous OCR test failed for {pdf_file.name}: HTTP {response.status_code}")
+                return False
+                
+        except Exception as e:
+            print(f"❌ Synchronous OCR test error for {pdf_file.name}: {str(e)}")
+            return False
+    
+    def _test_async_ocr(self, pdf_file: Path) -> bool:
+        """Test asynchronous OCR endpoint"""
+        try:
+            print(f"🧪 Testing asynchronous OCR with {pdf_file.name}...")
+            
+            # Submit async job
+            with open(pdf_file, 'rb') as f:
+                files = {'file': (pdf_file.name, f, 'application/pdf')}
+                response = requests.post(f"{self.api_base_url}/ocr/async", files=files, timeout=30)
+            
+            if response.status_code == 200:
+                result = response.json()
+                job_id = result.get('job_id')
+                if job_id:
+                    print(f"✅ Async job submitted for {pdf_file.name}, job_id: {job_id}")
+                    
+                    # Wait for job completion (max 2 minutes)
+                    max_wait = 120
+                    wait_time = 0
+                    while wait_time < max_wait:
+                        try:
+                            job_response = requests.get(f"{self.api_base_url}/jobs/{job_id}", timeout=10)
+                            if job_response.status_code == 200:
+                                job_result = job_response.json()
+                                status = job_result.get('status')
+                                
+                                if status == 'finished':
+                                    print(f"✅ Asynchronous OCR test passed for {pdf_file.name}")
+                                    return True
+                                elif status == 'failed':
+                                    error = job_result.get('error', 'Unknown error')
+                                    print(f"❌ Asynchronous OCR test failed for {pdf_file.name}: {error}")
+                                    return False
+                                elif status in ['queued', 'started']:
+                                    # Still processing, wait
+                                    import time
+                                    time.sleep(5)
+                                    wait_time += 5
+                                    continue
+                                else:
+                                    print(f"❌ Asynchronous OCR test failed for {pdf_file.name}: Unexpected status {status}")
+                                    return False
+                            else:
+                                print(f"❌ Failed to check job status for {pdf_file.name}: HTTP {job_response.status_code}")
+                                return False
+                        except Exception as e:
+                            print(f"❌ Error checking job status for {pdf_file.name}: {str(e)}")
+                            return False
+                    
+                    print(f"❌ Asynchronous OCR test timeout for {pdf_file.name}")
+                    return False
+                else:
+                    print(f"❌ Asynchronous OCR test failed for {pdf_file.name}: No job_id returned")
+                    return False
+            else:
+                print(f"❌ Asynchronous OCR test failed for {pdf_file.name}: HTTP {response.status_code}")
+                return False
+                
+        except Exception as e:
+            print(f"❌ Asynchronous OCR test error for {pdf_file.name}: {str(e)}")
+            return False
+    
     def _run_warmup(self):
         """Run warmup process"""
         try:
@@ -56,19 +148,17 @@ class WarmupService:
             
             print(f"📁 Found {len(warmup_files)} warmup files")
             
-            # Process each warmup file
+            # Process each warmup file to load models
             for i, pdf_file in enumerate(warmup_files, 1):
                 try:
                     print(f"🔄 Processing warmup file {i}/{len(warmup_files)}: {pdf_file.name}")
                     
                     # Create temporary directory for processing
-                    import tempfile
-                    import shutil
                     temp_dir = tempfile.mkdtemp()
                     temp_path = Path(temp_dir)
                     
                     try:
-                        # Process the file using pdf_processor
+                        # Process the file using pdf_processor to load models
                         doc = pdf_processor.process_pdf(pdf_file, temp_path)
                         
                         # Store result
@@ -96,12 +186,46 @@ class WarmupService:
                         "timestamp": datetime.now().isoformat()
                     })
             
-            # Mark warmup as complete
-            self.warmup_status = "completed"
-            self.is_warmup_complete = True
-            self.end_time = datetime.now()
+            # Test API endpoints with the first warmup file
+            if warmup_files:
+                test_file = warmup_files[0]
+                print(f"🧪 Testing API endpoints with {test_file.name}...")
+                
+                # Test synchronous OCR
+                sync_success = self._test_sync_ocr(test_file)
+                
+                # Test asynchronous OCR
+                async_success = self._test_async_ocr(test_file)
+                
+                # Store endpoint test results
+                self.warmup_results.append({
+                    "file": "sync_ocr_test",
+                    "status": "success" if sync_success else "failed",
+                    "timestamp": datetime.now().isoformat()
+                })
+                
+                self.warmup_results.append({
+                    "file": "async_ocr_test", 
+                    "status": "success" if async_success else "failed",
+                    "timestamp": datetime.now().isoformat()
+                })
+                
+                # Only mark as complete if both tests pass
+                if sync_success and async_success:
+                    self.warmup_status = "completed"
+                    self.is_warmup_complete = True
+                    print("🎉 Warmup process completed successfully! API is ready to accept requests.")
+                else:
+                    self.warmup_status = "failed"
+                    self.is_warmup_complete = False
+                    print("❌ Warmup process failed: API endpoint tests failed")
+            else:
+                # No files to test with
+                self.warmup_status = "completed"
+                self.is_warmup_complete = True
+                print("🎉 Warmup process completed (no files to test with)")
             
-            print("🎉 Warmup process completed successfully!")
+            self.end_time = datetime.now()
             
         except Exception as e:
             print(f"❌ Warmup process failed: {str(e)}")
@@ -120,8 +244,12 @@ class WarmupService:
             "status": self.warmup_status,
             "results": self.warmup_results,
             "errors": self.warmup_errors,
-            "files_processed": len(self.warmup_results),
-            "files_failed": len(self.warmup_errors)
+            "files_processed": len([r for r in self.warmup_results if r.get('file') not in ['sync_ocr_test', 'async_ocr_test']]),
+            "files_failed": len(self.warmup_errors),
+            "endpoint_tests": {
+                "sync_ocr": next((r for r in self.warmup_results if r.get('file') == 'sync_ocr_test'), {}).get('status', 'not_tested'),
+                "async_ocr": next((r for r in self.warmup_results if r.get('file') == 'async_ocr_test'), {}).get('status', 'not_tested')
+            }
         }
         
         if self.start_time:
