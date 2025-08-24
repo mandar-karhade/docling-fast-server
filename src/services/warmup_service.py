@@ -72,12 +72,12 @@ class WarmupService:
             thread.start()
     
     def check_timeout(self) -> bool:
-        """Check if warmup has timed out (15 minutes)"""
+        """Check if warmup has timed out (5 minutes)"""
         if not self.start_time:
             return False
         
         duration = (datetime.now() - self.start_time).total_seconds()
-        return duration > 900  # 15 minutes
+        return duration > 300  # 5 minutes
     
     def force_complete(self):
         """Force complete warmup if it's taking too long"""
@@ -86,7 +86,7 @@ class WarmupService:
             self.warmup_status = "timeout"
             self.warmup_errors.append({
                 "file": "warmup_process",
-                "error": "Warmup timed out after 15 minutes",
+                "error": "Warmup timed out after 5 minutes",
                 "timestamp": datetime.now().isoformat()
             })
             self.end_time = datetime.now()
@@ -221,6 +221,51 @@ class WarmupService:
             print(f"❌ Asynchronous OCR test error for {pdf_file.name}: {str(e)}")
             return False
     
+    def _test_async_ocr_multiple(self, pdf_files: list) -> bool:
+        """Test asynchronous OCR endpoint with multiple PDFs"""
+        try:
+            print(f"🧪 Testing asynchronous OCR with {len(pdf_files)} PDF files...")
+            
+            success_count = 0
+            total_files = len(pdf_files)
+            
+            for pdf_file in pdf_files:
+                try:
+                    print(f"   📄 Testing {pdf_file.name}...")
+                    
+                    # Submit async job
+                    with open(pdf_file, 'rb') as f:
+                        files = {'file': (pdf_file.name, f, 'application/pdf')}
+                        response = requests.post(f"{self.api_base_url}/ocr/async", files=files, timeout=30)
+                    
+                    if response.status_code == 200:
+                        result = response.json()
+                        job_id = result.get('job_id')
+                        
+                        if job_id:
+                            print(f"   ✅ Async job submitted for {pdf_file.name}, job_id: {job_id}")
+                            success_count += 1
+                        else:
+                            print(f"   ❌ Async job failed for {pdf_file.name}: No job_id returned")
+                    else:
+                        print(f"   ❌ Async job failed for {pdf_file.name}: HTTP {response.status_code}")
+                        
+                except Exception as e:
+                    print(f"   ❌ Async job error for {pdf_file.name}: {str(e)}")
+            
+            # Consider test successful if at least 50% of files worked
+            success_rate = success_count / total_files if total_files > 0 else 0
+            if success_rate >= 0.5:
+                print(f"✅ Asynchronous OCR test passed: {success_count}/{total_files} files processed successfully")
+                return True
+            else:
+                print(f"❌ Asynchronous OCR test failed: {success_count}/{total_files} files processed successfully")
+                return False
+                
+        except Exception as e:
+            print(f"❌ Asynchronous OCR test error: {str(e)}")
+            return False
+    
     def _run_warmup(self):
         """Run warmup process with timeout protection"""
         try:
@@ -339,8 +384,9 @@ class WarmupService:
                 # Test Redis connection
                 redis_success = self._test_redis_connection()
                 
-                # Test asynchronous OCR
-                async_success = self._test_async_ocr(test_file)
+                # Test asynchronous OCR with multiple files (up to 2 files)
+                async_test_files = warmup_files[:2]  # Use up to 2 files for async testing
+                async_success = self._test_async_ocr_multiple(async_test_files)
                 
                 # Store endpoint test results
                 self.warmup_results.append({
