@@ -4,6 +4,7 @@ import threading
 import tempfile
 import shutil
 import requests
+import time
 from pathlib import Path
 from typing import Dict, List
 from datetime import datetime
@@ -35,14 +36,40 @@ class WarmupService:
         if self.warmup_status == "in_progress":
             return
         
-        self.warmup_status = "in_progress"
-        self.start_time = datetime.now()
-        self.warmup_results = []
-        self.warmup_errors = []
-        
-        # Start warmup in background thread
-        thread = threading.Thread(target=self._run_warmup, daemon=True)
-        thread.start()
+        # Use a file lock to ensure only one warmup process runs
+        lock_file = Path("/tmp/warmup.lock")
+        try:
+            if lock_file.exists():
+                # Check if lock is stale (older than 10 minutes)
+                lock_age = time.time() - lock_file.stat().st_mtime
+                if lock_age > 600:  # 10 minutes
+                    lock_file.unlink()
+                else:
+                    print("🔥 Warmup already in progress by another worker")
+                    return
+            
+            # Create lock file
+            lock_file.touch()
+            
+            self.warmup_status = "in_progress"
+            self.start_time = datetime.now()
+            self.warmup_results = []
+            self.warmup_errors = []
+            
+            # Start warmup in background thread
+            thread = threading.Thread(target=self._run_warmup, daemon=True)
+            thread.start()
+            
+        except Exception as e:
+            print(f"⚠️  Could not create warmup lock: {e}")
+            # Continue without lock if we can't create it
+            self.warmup_status = "in_progress"
+            self.start_time = datetime.now()
+            self.warmup_results = []
+            self.warmup_errors = []
+            
+            thread = threading.Thread(target=self._run_warmup, daemon=True)
+            thread.start()
     
     def _test_sync_ocr(self, pdf_file: Path) -> bool:
         """Test synchronous OCR endpoint"""
@@ -271,6 +298,14 @@ class WarmupService:
             
             self.end_time = datetime.now()
             
+            # Clean up lock file
+            try:
+                lock_file = Path("/tmp/warmup.lock")
+                if lock_file.exists():
+                    lock_file.unlink()
+            except:
+                pass
+            
         except Exception as e:
             print(f"❌ Warmup process failed: {str(e)}")
             self.warmup_status = "failed"
@@ -280,6 +315,14 @@ class WarmupService:
                 "timestamp": datetime.now().isoformat()
             })
             self.end_time = datetime.now()
+            
+            # Clean up lock file on failure too
+            try:
+                lock_file = Path("/tmp/warmup.lock")
+                if lock_file.exists():
+                    lock_file.unlink()
+            except:
+                pass
     
     def get_status(self) -> Dict:
         """Get current warmup status"""
