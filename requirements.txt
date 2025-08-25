@@ -1,10 +1,20 @@
-fastapi==0.116.1
-uvicorn[standard]==0.35.0
-python-multipart==0.0.20
-python-dotenv==1.1.1
-# Install docling without full extras to avoid CUDA
-docling==2.46.0
-deepsearch-toolkit==2.0.1
-psutil==6.1.0
-rq==1.15.1
-upstash-redis==1.4.0
+fastapi
+uvicorn
+python-dotenv
+requests
+python-multipart
+# OCR and PDF processing
+easyocr
+PyMuPDF
+docling
+# Redis queue
+rq
+redis
+upstash-redis
+# Other
+psutil
+Pillow
+six
+# Testing
+pytest
+httpx
