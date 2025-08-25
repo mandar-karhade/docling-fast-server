@@ -201,7 +201,7 @@ class WarmupService:
     def _test_sync_ocr(self, pdf_file: Path) -> bool:
         """Test synchronous OCR endpoint"""
         try:
-            print(f"🧪 Testing /ocr endpoint (synchronous) with {pdf_file.name}...")
+            print(f"📋 test 1: /ocr >> job submitted {pdf_file.name}")
             
             # Create temporary file for testing
             with open(pdf_file, 'rb') as f:
@@ -211,17 +211,22 @@ class WarmupService:
             if response.status_code == 200:
                 result = response.json()
                 if result.get('status') == 'success':
-                    print(f"✅ /ocr endpoint test passed for {pdf_file.name}")
+                    print(f"📋 test 1: /ocr >> successful {pdf_file.name}")
+                    
+                    # Show result keys like jq would
+                    result_keys = list(result.keys())
+                    print(f"📋 test 1 results >> {pdf_file.name}: {result_keys}")
+                    
                     return True
                 else:
-                    print(f"❌ /ocr endpoint test failed for {pdf_file.name}: {result}")
+                    print(f"❌ test 1: /ocr >> failed {pdf_file.name}: {result}")
                     return False
             else:
-                print(f"❌ /ocr endpoint test failed for {pdf_file.name}: HTTP {response.status_code}")
+                print(f"❌ test 1: /ocr >> failed {pdf_file.name}: HTTP {response.status_code}")
                 return False
                 
         except Exception as e:
-            print(f"❌ /ocr endpoint test error for {pdf_file.name}: {str(e)}")
+            print(f"❌ test 1: /ocr >> error for {pdf_file.name}: {str(e)}")
             return False
     
     def _test_redis_connection(self) -> bool:
@@ -256,7 +261,8 @@ class WarmupService:
     def _test_async_ocr_multiple(self, pdf_files: list) -> bool:
         """Test asynchronous OCR endpoint with multiple PDFs and wait for completion"""
         try:
-            print(f"🧪 Testing /ocr/async endpoint (asynchronous) with {len(pdf_files)} PDF files...")
+            filenames = [f.name for f in pdf_files]
+            print(f"📋 test 2: /ocr/async >> {len(pdf_files)} files submitted {' '.join(filenames)}")
             
             submitted_jobs = []
             total_files = len(pdf_files)
@@ -264,8 +270,6 @@ class WarmupService:
             # Submit all jobs first
             for pdf_file in pdf_files:
                 try:
-                    print(f"   📄 Submitting {pdf_file.name}...")
-                    
                     # Submit async job
                     with open(pdf_file, 'rb') as f:
                         files = {'file': (pdf_file.name, f, 'application/pdf')}
@@ -276,7 +280,6 @@ class WarmupService:
                         job_id = result.get('job_id')
                         
                         if job_id:
-                            print(f"   ✅ Job submitted for {pdf_file.name}, job_id: {job_id}")
                             submitted_jobs.append({'job_id': job_id, 'filename': pdf_file.name})
                         else:
                             print(f"   ❌ Job submission failed for {pdf_file.name}: No job_id returned")
@@ -290,11 +293,20 @@ class WarmupService:
                 print("❌ No jobs were submitted successfully")
                 return False
             
+            # Show submitted job IDs
+            successful_filenames = [job['filename'] for job in submitted_jobs]
+            print(f"📋 test 2: /ocr/async >> {len(submitted_jobs)} files successful {' '.join(successful_filenames)}")
+            
+            # Show job IDs
+            print("📋 test 2 jobs >>")
+            for i, job_info in enumerate(submitted_jobs, 1):
+                print(f"   file {i} : {job_info['job_id']}")
+            
             # Now wait for jobs to complete and check their status
-            print(f"   ⏳ Waiting for {len(submitted_jobs)} jobs to complete (max 2 minutes)...")
             success_count = 0
             max_wait_time = 120  # 120 seconds (2 minutes) max wait time
             wait_interval = 5   # Check every 5 seconds
+            completed_jobs = []
             
             for job_info in submitted_jobs:
                 job_id = job_info['job_id']
@@ -313,17 +325,25 @@ class WarmupService:
                             if job_status == 'finished':
                                 result = status_result.get('result')
                                 if result and result.get('status') == 'success':
-                                    print(f"   ✅ Job completed successfully for {filename}")
+                                    # Show result keys like jq would
+                                    result_keys = list(result.keys())
+                                    file_num = len(completed_jobs) + 1
+                                    print(f"📋 job {file_num}: {job_id} completed for test 2 {filename} - results {result_keys}")
+                                    completed_jobs.append(job_info)
                                     success_count += 1
                                 else:
                                     print(f"   ❌ Job finished but failed for {filename}: {result}")
+                                    completed_jobs.append(job_info)
                                 break
                             elif job_status == 'failed':
                                 error_msg = status_result.get('error', 'Unknown error')
                                 print(f"   ❌ Job failed for {filename}: {error_msg}")
+                                completed_jobs.append(job_info)
                                 break
                             elif job_status in ['queued', 'started']:
-                                print(f"   ⏳ Job {job_status} for {filename}, waiting...")
+                                # Only show this message occasionally to avoid spam
+                                if waited_time % 15 == 0:  # Every 15 seconds
+                                    print(f"   ⏳ Job {job_status} for {filename}, waiting...")
                             else:
                                 print(f"   ❓ Unknown job status for {filename}: {job_status}")
                         else:
@@ -337,14 +357,18 @@ class WarmupService:
                 
                 if waited_time >= max_wait_time:
                     print(f"   ⏰ Timeout waiting for {filename} to complete")
+                    completed_jobs.append(job_info)
             
-            # Consider test successful if at least 50% of jobs completed successfully
-            success_rate = success_count / len(submitted_jobs) if submitted_jobs else 0
-            if success_rate >= 0.5:
-                print(f"✅ /ocr/async endpoint test passed: {success_count}/{len(submitted_jobs)} jobs completed successfully")
+            # Final status
+            if success_count == len(submitted_jobs):
+                print(f"\n✅ Job results were successfully retrieved.")
+                print(f"🎉 Warmup complete")
                 return True
+            elif success_count > 0:
+                print(f"\n⚠️  Partial success: {success_count}/{len(submitted_jobs)} jobs completed successfully")
+                return success_count >= len(submitted_jobs) * 0.5  # 50% success rate
             else:
-                print(f"❌ /ocr/async endpoint test failed: {success_count}/{len(submitted_jobs)} jobs completed successfully")
+                print(f"\n❌ All async jobs failed")
                 return False
                 
         except Exception as e:
@@ -373,19 +397,19 @@ class WarmupService:
                 print(f"🧪 Testing API endpoints...")
                 
                 # Test /ocr endpoint (synchronous) with single file
-                print(f"📋 Testing /ocr endpoint with single file: {test_file.name}")
                 sync_success = self._test_sync_ocr(test_file)
                 
                 # Test /ocr/async endpoint (asynchronous) with multiple files (up to 2 files)
                 async_test_files = warmup_files[:2]  # Use up to 2 files for async testing
-                print(f"📋 Testing /ocr/async endpoint with {len(async_test_files)} files: {[f.name for f in async_test_files]}")
                 async_success = self._test_async_ocr_multiple(async_test_files)
                 
                 # Mark as ready if /ocr endpoint works
                 if sync_success:
                     self.warmup_status = "ready"
                     self._set_redis_status("ready")
-                    print("🎉 Warmup process completed! Both /ocr and /ocr/async endpoints tested successfully.")
+                    if not async_success:  # Only print if async didn't already print completion
+                        print("\n✅ Job results were successfully retrieved.")
+                        print("🎉 Warmup complete")
                 else:
                     self.warmup_status = "failed"
                     self._set_redis_status("failed")
@@ -416,35 +440,50 @@ class WarmupService:
             warmup_files = self.get_warmup_files()
             if not warmup_files:
                 print("⚠️  No warmup files found - skipping model warmup")
-            else:
-                print(f"📁 Found {len(warmup_files)} warmup files")
+                print("🎉 Container-level warmup completed successfully! (No test files)")
+                self.warmup_status = "ready"
+                return
                 
-                # Test model loading and processing with first warmup file
-                test_file = warmup_files[0]
-                print(f"🧪 Testing model loading and processing with {test_file.name}...")
+            print(f"📁 Found {len(warmup_files)} warmup files: {[f.name for f in warmup_files]}")
+            
+            # Test each warmup file for thorough testing
+            for i, test_file in enumerate(warmup_files[:2], 1):  # Limit to 2 files max
+                print(f"\n📋 Container Test {i}: Direct Processing >> {test_file.name}")
                 
                 try:
                     # Process the file directly (this will download models on first use)
-                    doc = pdf_processor.process_pdf(test_file, Path(tempfile.mkdtemp()))
+                    temp_dir = Path(tempfile.mkdtemp())
+                    doc = pdf_processor.process_pdf(test_file, temp_dir)
                     
                     # Generate results to test output functionality
                     results = pdf_processor.get_output(doc, test_file.stem, "warmup")
                     
-                    if results:
-                        print(f"✅ Model loading and processing test successful with {test_file.name}")
-                        print(f"   Generated: markdown ({len(str(results.get('markdown', '')))} chars), "
-                              f"JSON ({len(str(results.get('json', {})))} chars)")
+                    if results and isinstance(results, dict):
+                        # Show result keys like jq would
+                        result_keys = list(results.keys())
+                        print(f"📋 Container Test {i}: Direct Processing >> successful {test_file.name}")
+                        print(f"📋 Container Test {i} results >> {test_file.name}: {result_keys}")
+                        
+                        # Show some size info
+                        markdown_size = len(str(results.get('markdown', '')))
+                        json_size = len(str(results.get('json', {})))
+                        print(f"   Content: markdown ({markdown_size} chars), JSON ({json_size} chars)")
                     else:
-                        print(f"❌ Processing test failed for {test_file.name}")
+                        print(f"❌ Container Test {i}: Processing failed for {test_file.name}")
                         raise Exception("Failed to generate results")
+                    
+                    # Cleanup temp directory
+                    shutil.rmtree(temp_dir, ignore_errors=True)
                         
                 except Exception as e:
-                    print(f"❌ Model loading test failed with {test_file.name}: {e}")
+                    print(f"❌ Container Test {i}: Processing failed for {test_file.name}: {e}")
                     raise
+            
+            print(f"\n✅ Job results were successfully generated.")
+            print(f"🎉 Container-level warmup complete!")
             
             # Mark as ready
             self.warmup_status = "ready"
-            print("🎉 Container-level warmup completed successfully!")
             
         except Exception as e:
             print(f"❌ Container-level warmup failed: {str(e)}")
