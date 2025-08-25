@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""
+Test RunPod Async OCR with Small PDF
+====================================
+Test the async OCR endpoint on RunPod with a small PDF first.
+"""
+
+import requests
+import json
+import os
+import time
+from pathlib import Path
+
+def test_runpod_async_small():
+    """Test the async OCR endpoint on RunPod with small PDF"""
+    # Get RunPod URL from environment variable
+    runpod_machine_id = os.getenv('RUNPOD_MACHINE_ID')
+    if not runpod_machine_id:
+        print("❌ Error: RUNPOD_MACHINE_ID environment variable not set")
+        print("   Please set it to your RunPod machine ID (e.g., 'g2zuausy1g8sj2-8000')")
+        return
+    
+    base_url = f"https://{runpod_machine_id}.proxy.runpod.net"
+    
+    # Find the smallest PDF for testing
+    test_pdf_dir = Path("test_pdf")
+    pdf_files = list(test_pdf_dir.glob("*.pdf"))
+    
+    if not pdf_files:
+        print("❌ No PDF files found in test_pdf directory")
+        return
+    
+    # Use the smallest PDF for testing async processing
+    smallest_pdf = min(pdf_files, key=lambda x: x.stat().st_size)
+    pdf_path = smallest_pdf
+    print(f"📄 Testing RunPod Async OCR with smallest PDF: {pdf_path.name} ({pdf_path.stat().st_size / 1024:.1f} KB)")
+    print(f"🌐 RunPod endpoint: {base_url}")
+    
+    # Test health first
+    print(f"\n🔍 Testing health endpoint...")
+    try:
+        health_response = requests.get(f"{base_url}/health", timeout=30)
+        print(f"   Health Status: {health_response.status_code}")
+        if health_response.status_code == 200:
+            print(f"   Health Response: {health_response.json()}")
+        else:
+            print(f"   Health Error: {health_response.text}")
+    except Exception as e:
+        print(f"   Health check failed: {e}")
+        return
+    
+    # Start async OCR processing
+    print(f"\n🚀 Starting async OCR processing for {pdf_path.name}...")
+    try:
+        with open(pdf_path, 'rb') as f:
+            files = {'file': (pdf_path.name, f, 'application/pdf')}
+            headers = {
+                'Accept-Encoding': 'gzip, deflate, br'
+            }
+            
+            print("📤 Uploading PDF to RunPod server...")
+            response = requests.post(f"{base_url}/ocr/async", files=files, headers=headers, timeout=60)
+
+        print(f"   Status: {response.status_code}")
+        
+        if response.status_code == 200:
+            result = response.json()
+            job_id = result['job_id']
+            print(f"✅ Async job started successfully!")
+            print(f"   Job ID: {job_id}")
+            print(f"   Status: {result['status']}")
+            print(f"   Message: {result['message']}")
+            
+            # Poll for job completion
+            print(f"\n⏳ Polling for job completion...")
+            max_polls = 30  # Maximum 5 minutes (30 * 10 seconds)
+            poll_interval = 10  # Poll every 10 seconds
+            
+            for poll_count in range(max_polls):
+                try:
+                    status_response = requests.get(f"{base_url}/jobs/{job_id}", timeout=30)
+                    
+                    if status_response.status_code == 200:
+                        job_status = status_response.json()
+                        status = job_status['status']
+                        progress = job_status['progress']
+                        
+                        print(f"   Poll {poll_count + 1}: Status={status}, Progress={progress}%")
+                        
+                        if status == 'completed':
+                            print(f"✅ Job completed successfully!")
+                            
+                            # Save results
+                            result_data = job_status['result']
+                            if result_data and 'files' in result_data:
+                                files = result_data['files']
+                                for file_type, content in files.items():
+                                    if file_type == 'converted_doc':
+                                        print(f"📄 {file_type}: Document object (not saved to file)")
+                                    elif file_type == 'json':
+                                        content_str = json.dumps(content, indent=2)
+                                        output_file = Path(f"output/runpod_async_small_{pdf_path.stem}.{file_type}")
+                                        with open(output_file, 'w', encoding='utf-8') as f:
+                                            f.write(content_str)
+                                        print(f"💾 Saved {file_type}: {output_file} ({len(content_str) / 1024:.1f} KB)")
+                                    else:
+                                        output_file = Path(f"output/runpod_async_small_{pdf_path.stem}.{file_type}")
+                                        with open(output_file, 'w', encoding='utf-8') as f:
+                                            f.write(content)
+                                        print(f"💾 Saved {file_type}: {output_file} ({len(content) / 1024:.1f} KB)")
+                            
+                            return
+                            
+                        elif status == 'failed':
+                            error = job_status.get('error', 'Unknown error')
+                            print(f"❌ Job failed: {error}")
+                            return
+                            
+                        elif status in ['pending', 'processing']:
+                            # Continue polling
+                            time.sleep(poll_interval)
+                            continue
+                            
+                    else:
+                        print(f"   Poll {poll_count + 1}: Error getting status - {status_response.status_code}")
+                        time.sleep(poll_interval)
+                        
+                except Exception as e:
+                    print(f"   Poll {poll_count + 1}: Exception - {e}")
+                    time.sleep(poll_interval)
+            
+            print(f"⏰ Polling timeout reached. Job may still be processing.")
+            
+        else:
+            print(f"❌ Failed to start async job: {response.status_code}")
+            print(f"   Error: {response.text}")
+
+    except requests.exceptions.Timeout:
+        print("⏰ Request timed out - Failed to start async job")
+    except requests.exceptions.ConnectionError:
+        print("🔌 Connection error - Check if the RunPod server is accessible")
+    except Exception as e:
+        print(f"❌ Async OCR processing error: {e}")
+        import traceback
+        traceback.print_exc()
+
+    print("\n🎉 RunPod async OCR test completed!")
+
+if __name__ == "__main__":
+    test_runpod_async_small()

@@ -5,7 +5,6 @@ services:
       - env.local
     ports:
       - "8850:8000"
-
     volumes:
       - workspace_data:/home/appuser/.EasyOCR
     restart: unless-stopped
@@ -15,6 +14,15 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+
+  worker:
+    build: .
+    command: python -m src.worker
+    env_file:
+      - env.local
+    volumes:
+      - workspace_data:/home/appuser/.EasyOCR
+    restart: unless-stopped
 
 volumes:
   workspace_data:
