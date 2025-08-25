@@ -11,6 +11,9 @@ from docling.datamodel.pipeline_options import (
     PictureDescriptionApiOptions,
     EasyOcrOptions,
 )
+from docling_core.types.doc.base import (
+    ImageRefMode,
+)
 from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling.datamodel.accelerator_options import AcceleratorDevice, AcceleratorOptions
 
@@ -96,7 +99,7 @@ class PDFProcessor:
             picture_description_options=self.get_picture_description_options()
         )
 
-    def process_pdf(self, pdf_path: Path, output_dir: Path) -> Dict[str, Any]:
+    def process_pdf(self, pdf_path: Path) -> Dict[str, Any]:
         """Process PDF using locally installed docling with the same options"""
         print(f"📄 Processing {pdf_path.name} with local docling")
         
@@ -122,10 +125,10 @@ class PDFProcessor:
             results = {
                 'filename': pdf_stem,
                 'converted_doc': doc,
-                'markdown': doc.export_to_markdown(),
+                'doctags': doc.export_to_doctags(),
                 'json': doc.export_to_dict(),
-                'html': doc.export_to_html(),
-                'text': doc.export_to_text()
+                'markdown': doc.export_to_markdown(image_mode=ImageRefMode.EMBEDDED),
+                'html': doc.export_to_html(image_mode=ImageRefMode.EMBEDDED),
             }
             
             print(f"📦 Created results object for {pdf_stem}_{suffix}")
@@ -162,7 +165,7 @@ class PDFProcessor:
             # Process the PDF in a thread pool since process_pdf is blocking
             queue_manager.update_job(job_id, JobUpdate(), "Starting document conversion in thread pool")
             loop = asyncio.get_event_loop()
-            doc = await loop.run_in_executor(None, self.process_pdf, pdf_path, temp_path)
+            doc = await loop.run_in_executor(None, self.process_pdf, pdf_path)
             queue_manager.update_job(job_id, JobUpdate(), "Document conversion completed")
             
             # Generate results

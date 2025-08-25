@@ -26,7 +26,7 @@ async def process_pdf_ocr(file: UploadFile = File(...)):
             shutil.copyfileobj(file.file, buffer)
         
         # Process the PDF
-        doc = pdf_processor.process_pdf(pdf_path, temp_path)
+        doc = pdf_processor.process_pdf(pdf_path)
         
         # Generate results directly from document
         pdf_stem = pdf_path.stem

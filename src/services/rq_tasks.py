@@ -22,7 +22,7 @@ def process_pdf_task(pdf_data: bytes, filename: str):
         
         # Process the PDF
         print(f"📄 Processing {filename} in async task")
-        doc = pdf_processor.process_pdf(pdf_path, temp_path)
+        doc = pdf_processor.process_pdf(pdf_path)
         
         # Generate results
         pdf_stem = pdf_path.stem

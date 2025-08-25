@@ -457,7 +457,7 @@ class WarmupService:
                 try:
                     # Process the file directly (this will download models on first use)
                     temp_dir = Path(tempfile.mkdtemp())
-                    doc = pdf_processor.process_pdf(test_file, temp_dir)
+                    doc = pdf_processor.process_pdf(test_file)
                     
                     # Generate results to test output functionality
                     results = pdf_processor.get_output(doc, test_file.stem, "warmup")
