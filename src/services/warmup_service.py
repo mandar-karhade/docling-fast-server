@@ -71,7 +71,7 @@ class WarmupService:
         self.warmup_status = "in_progress"
         
         try:
-            self._run_warmup()
+            self._run_warmup_container_level()
         except Exception as e:
             print(f"❌ Synchronous warmup failed: {e}")
             raise
@@ -406,6 +406,50 @@ class WarmupService:
             
             # Release Redis lock on failure (only if using Redis coordination)
             self._release_redis_lock()
+    
+    def _run_warmup_container_level(self):
+        """Run container-level warmup without API endpoint testing"""
+        try:
+            print("🔥 Starting container-level warmup process...")
+            
+            # Get warmup files
+            warmup_files = self.get_warmup_files()
+            if not warmup_files:
+                print("⚠️  No warmup files found - skipping model warmup")
+            else:
+                print(f"📁 Found {len(warmup_files)} warmup files")
+                
+                # Test model loading and processing with first warmup file
+                test_file = warmup_files[0]
+                print(f"🧪 Testing model loading and processing with {test_file.name}...")
+                
+                try:
+                    # Process the file directly (this will download models on first use)
+                    doc = pdf_processor.process_pdf(test_file, Path(tempfile.mkdtemp()))
+                    
+                    # Generate results to test output functionality
+                    results = pdf_processor.get_output(doc, test_file.stem, "warmup")
+                    
+                    if results:
+                        print(f"✅ Model loading and processing test successful with {test_file.name}")
+                        print(f"   Generated: markdown ({len(str(results.get('markdown', '')))} chars), "
+                              f"JSON ({len(str(results.get('json', {})))} chars)")
+                    else:
+                        print(f"❌ Processing test failed for {test_file.name}")
+                        raise Exception("Failed to generate results")
+                        
+                except Exception as e:
+                    print(f"❌ Model loading test failed with {test_file.name}: {e}")
+                    raise
+            
+            # Mark as ready
+            self.warmup_status = "ready"
+            print("🎉 Container-level warmup completed successfully!")
+            
+        except Exception as e:
+            print(f"❌ Container-level warmup failed: {str(e)}")
+            self.warmup_status = "failed"
+            raise
     
     def get_status(self) -> Dict:
         """Get current warmup status"""
