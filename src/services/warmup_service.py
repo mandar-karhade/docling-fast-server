@@ -29,6 +29,9 @@ class WarmupService:
         self.current_step = ""
         self.is_timed_out = False
         
+        # Check if warmup is already completed by another worker
+        self._check_global_completion()
+        
     def get_warmup_files(self) -> List[Path]:
         """Get list of PDF files in warmup directory"""
         if not self.warmup_dir.exists():
@@ -42,11 +45,93 @@ class WarmupService:
         if not self.start_time:
             return False
         
+        # Don't timeout if warmup has already completed successfully
+        if self.is_warmup_complete and self.warmup_status == "completed":
+            return False
+        
         elapsed = (datetime.now() - self.start_time).total_seconds()
         if elapsed > 300:  # 5 minutes
             self.is_timed_out = True
             return True
         return False
+    
+    def _check_global_completion(self):
+        """Check if warmup is already completed by another worker using Redis"""
+        try:
+            from upstash_redis import Redis
+            import os
+            import json
+            
+            # Get Redis connection
+            redis_url = os.getenv('UPSTASH_REDIS_REST_URL')
+            redis_token = os.getenv('UPSTASH_REDIS_REST_TOKEN')
+            
+            if not redis_url or not redis_token:
+                print("⚠️  Could not check global completion: Missing Redis credentials")
+                return
+            
+            redis_conn = Redis(url=redis_url, token=redis_token)
+            
+            # Check if warmup completion data exists in Redis
+            completion_data = redis_conn.get("warmup:completion")
+            
+            if completion_data:
+                # Parse the completion data
+                completion_data = json.loads(completion_data)
+                
+                # Restore warmup state
+                self.warmup_status = completion_data.get('status', 'completed')
+                self.is_warmup_complete = completion_data.get('is_warmup_complete', True)
+                self.warmup_results = completion_data.get('results', [])
+                self.warmup_errors = completion_data.get('errors', [])
+                self.start_time = datetime.fromisoformat(completion_data['start_time']) if completion_data.get('start_time') else None
+                self.end_time = datetime.fromisoformat(completion_data['end_time']) if completion_data.get('end_time') else None
+                self.total_steps = completion_data.get('total_steps', 0)
+                self.completed_steps = completion_data.get('completed_steps', 0)
+                self.current_step = completion_data.get('current_step', 'Completed')
+                self.is_timed_out = completion_data.get('is_timed_out', False)
+                
+                print("🔥 Warmup already completed by another worker (Redis)")
+        except Exception as e:
+            print(f"⚠️  Could not check global completion: {e}")
+    
+    def _save_global_completion(self):
+        """Save warmup completion status to Redis"""
+        try:
+            from upstash_redis import Redis
+            import os
+            import json
+            
+            # Get Redis connection
+            redis_url = os.getenv('UPSTASH_REDIS_REST_URL')
+            redis_token = os.getenv('UPSTASH_REDIS_REST_TOKEN')
+            
+            if not redis_url or not redis_token:
+                print("⚠️  Could not save global completion: Missing Redis credentials")
+                return
+            
+            redis_conn = Redis(url=redis_url, token=redis_token)
+            
+            # Prepare completion data
+            completion_data = {
+                'status': self.warmup_status,
+                'is_warmup_complete': self.is_warmup_complete,
+                'results': self.warmup_results,
+                'errors': self.warmup_errors,
+                'start_time': self.start_time.isoformat() if self.start_time else None,
+                'end_time': self.end_time.isoformat() if self.end_time else None,
+                'total_steps': self.total_steps,
+                'completed_steps': self.completed_steps,
+                'current_step': self.current_step,
+                'is_timed_out': self.is_timed_out
+            }
+            
+            # Save to Redis with 24-hour expiration
+            redis_conn.setex("warmup:completion", 86400, json.dumps(completion_data))
+            print("💾 Warmup completion status saved to Redis")
+                
+        except Exception as e:
+            print(f"⚠️  Could not save global completion: {e}")
     
     def force_complete(self):
         """Force complete warmup due to timeout"""
@@ -58,6 +143,9 @@ class WarmupService:
             "error": "Warmup process timed out after 5 minutes",
             "timestamp": datetime.now().isoformat()
         })
+        
+        # Save global completion status
+        self._save_global_completion()
         
         # Clean up lock file
         try:
@@ -71,7 +159,8 @@ class WarmupService:
     
     def start_warmup(self):
         """Start warmup process in background thread"""
-        if self.warmup_status == "in_progress":
+        # Don't start if already in progress or completed
+        if self.warmup_status == "in_progress" or self.is_warmup_complete:
             return
         
         # Use a file lock to ensure only one warmup process runs
@@ -348,6 +437,9 @@ class WarmupService:
                         self.warmup_status = "completed"
                         self.is_warmup_complete = True
                         print("🎉 Warmup process completed! Synchronous OCR working. Async OCR requires Redis connection. API is ready to accept requests.")
+                    
+                    # Save completion status to Redis
+                    self._save_global_completion()
                 else:
                     self.warmup_status = "failed"
                     print("❌ Warmup process failed: Synchronous OCR endpoint test failed")
@@ -360,6 +452,9 @@ class WarmupService:
                 self.warmup_status = "completed"
                 self.is_warmup_complete = True
                 print("🎉 Warmup process completed! (No warmup files to test)")
+                
+                # Save completion status to Redis
+                self._save_global_completion()
             
             self.end_time = datetime.now()
             self.current_step = "Completed"
@@ -392,8 +487,8 @@ class WarmupService:
     
     def get_status(self) -> Dict:
         """Get current warmup status"""
-        # Check for timeout
-        if self.check_timeout():
+        # Check for timeout only if warmup is still in progress
+        if self.warmup_status == "in_progress" and self.check_timeout():
             self.force_complete()
         
         status = {

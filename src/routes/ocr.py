@@ -81,7 +81,6 @@ async def process_pdf_ocr_async(file: UploadFile = File(...)):
         return {
             "status": "accepted",
             "job_id": rq_job.id,  # Use RQ job ID as primary identifier
-            "batch_id": queue_manager._get_current_batch_id(),
             "message": "PDF processing queued. Use /jobs/{job_id} to check status."
         }
         

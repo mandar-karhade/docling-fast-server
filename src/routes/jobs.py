@@ -78,25 +78,10 @@ async def delete_job(job_id: str):
 
 @router.get("/get_logs")
 async def get_logs():
-    """Get the latest log file content"""
+    """Get the latest log content from in-memory jobs"""
     try:
-        # Get current batch ID
-        batch_id = queue_manager._get_current_batch_id()
-        jobs_file = queue_manager._get_jobs_file_path()
-        
-        # Check if jobs file exists
-        import os
-        if not os.path.exists(jobs_file):
-            return {
-                "status": "no_logs",
-                "batch_id": batch_id,
-                "message": "No jobs file found for current batch"
-            }
-        
-        # Read the jobs file
-        import json
-        with open(jobs_file, 'r') as f:
-            jobs_data = json.load(f)
+        # Get jobs from memory
+        jobs_data = queue_manager.get_all_jobs()
         
         # Count jobs by status
         status_counts = {'pending': 0, 'processing': 0, 'completed': 0, 'failed': 0}
@@ -118,8 +103,6 @@ async def get_logs():
         
         return {
             "status": "success",
-            "batch_id": batch_id,
-            "jobs_file": jobs_file,
             "status_summary": status_counts,
             "total_jobs": len(jobs_data),
             "total_logs": len(all_logs),
