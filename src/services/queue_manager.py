@@ -4,7 +4,6 @@ import asyncio
 import queue
 import threading
 import json
-import fcntl
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Optional
@@ -55,25 +54,46 @@ class QueueManager:
                 json.dump({}, f)
     
     def _load_jobs_from_file(self) -> Dict[str, Dict]:
-        """Load jobs from shared file storage"""
+        """Load jobs from shared file storage with robust error handling"""
         try:
+            if not self.jobs_file.exists():
+                return {}
+                
             with open(self.jobs_file, 'r') as f:
-                fcntl.flock(f.fileno(), fcntl.LOCK_SH)  # Shared lock for reading
-                jobs_data = json.load(f)
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)  # Unlock
-                return jobs_data
-        except (FileNotFoundError, json.JSONDecodeError):
+                content = f.read().strip()
+                if not content:
+                    return {}
+                jobs_data = json.loads(content)
+                return jobs_data if isinstance(jobs_data, dict) else {}
+        except (FileNotFoundError, json.JSONDecodeError, OSError) as e:
+            print(f"⚠️ Error loading jobs from file: {e}")
             return {}
     
     def _save_jobs_to_file(self, jobs_data: Dict[str, Dict]):
-        """Save jobs to shared file storage"""
+        """Save jobs to shared file storage using atomic write"""
+        import tempfile
+        import os
+        
         try:
-            with open(self.jobs_file, 'w') as f:
-                fcntl.flock(f.fileno(), fcntl.LOCK_EX)  # Exclusive lock for writing
-                json.dump(jobs_data, f, indent=2)
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)  # Unlock
+            # Write to temporary file first (atomic operation)
+            temp_file = self.jobs_file.with_suffix('.tmp')
+            
+            with open(temp_file, 'w') as f:
+                json.dump(jobs_data, f, indent=2, default=str)
+                f.flush()  # Ensure data is written
+                os.fsync(f.fileno())  # Force write to disk
+            
+            # Atomic rename (this is atomic on most filesystems)
+            os.rename(temp_file, self.jobs_file)
+            
         except Exception as e:
             print(f"⚠️ Error saving jobs to file: {e}")
+            # Clean up temp file if it exists
+            try:
+                if temp_file.exists():
+                    temp_file.unlink()
+            except:
+                pass
     
     def _sync_jobs(self):
         """Sync in-memory jobs with file storage"""

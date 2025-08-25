@@ -85,7 +85,7 @@
 ## Key Behaviors
 
 ### Multi-Worker Environment
-- **Workers**: Multiple Uvicorn workers (`UVICORN_WORKERS` env var)
+- **Workers**: Fixed at 4 Uvicorn workers for optimal performance
 - **Job Visibility**: All workers can see and update any job
 - **No 404 Errors**: Jobs remain accessible after completion
 - **Shared State**: File-based synchronization prevents race conditions
@@ -106,11 +106,13 @@
 
 ### Required Variables
 ```bash
-UVICORN_WORKERS=4          # Number of API workers
-RQ_WORKERS=2               # Number of processing workers  
-OMP_NUM_THREADS=1          # OpenMP thread limit
 OPENAI_API_KEY=xxx         # Optional: for AI features
+RQ_WORKERS=2               # Number of processing workers (set in RunPod env)
 ```
+
+### Fixed Configuration
+- **UVICORN_WORKERS**: Fixed at 4 API workers
+- **OMP_NUM_THREADS**: Fixed at 4 threads per worker
 
 ### Optional Redis (Queue Persistence)
 ```bash

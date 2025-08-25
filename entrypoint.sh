@@ -5,10 +5,9 @@ set -e
 
 echo "🚀 Starting Docling CPU API with managed Redis and RQ workers..."
 
-# Set default values if not provided
-export OMP_NUM_THREADS=${OMP_NUM_THREADS:-4}
-export UVICORN_WORKERS=${UVICORN_WORKERS:-4}
-export RQ_WORKERS=${RQ_WORKERS:-2}
+# Set default values 
+export OMP_NUM_THREADS=4
+export UVICORN_WORKERS=4
 
 # Validate OpenAI API key
 if [ -z "$OPENAI_API_KEY" ]; then
