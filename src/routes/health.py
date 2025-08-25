@@ -12,8 +12,8 @@ async def health_check():
     # Check Redis for global completion status first
     warmup_service._check_global_completion()
     
-    # Start warmup only if not already started AND not completed
-    if warmup_service.warmup_status == "not_started" and not warmup_service.is_warmup_complete:
+    # Start warmup only if not already started
+    if warmup_service.warmup_status == "not_started":
         warmup_service.start_warmup()
     
     # Check if warmup is complete

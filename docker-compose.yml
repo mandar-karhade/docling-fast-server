@@ -4,12 +4,8 @@ services:
     env_file:
       - env.local
     ports:
-      - "8000:8000"
-    environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OMP_NUM_THREADS=${OMP_NUM_THREADS:-4}  # Cores per process (default: 4 for local)
-      - UVICORN_WORKERS=${UVICORN_WORKERS:-4}  # Number of worker processes (default: 4 for API handling)
-      - UPSTASH_REDIS_URL=${UPSTASH_REDIS_URL}
+      - "8850:8000"
+
     volumes:
       - workspace_data:/home/appuser/.EasyOCR
     restart: unless-stopped

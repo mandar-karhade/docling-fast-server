@@ -15,19 +15,8 @@ from .pdf_processor import pdf_processor
 class WarmupService:
     def __init__(self):
         self.warmup_dir = Path("warmup_files")
-        self.is_warmup_complete = False
         self.warmup_status = "not_started"
-        self.warmup_results = []
-        self.warmup_errors = []
-        self.start_time = None
-        self.end_time = None
         self.api_base_url = "http://localhost:8000"
-        
-        # Progress tracking
-        self.total_steps = 0
-        self.completed_steps = 0
-        self.current_step = ""
-        self.is_timed_out = False
         
         # Check if warmup is already completed by another worker
         self._check_global_completion()
@@ -40,27 +29,13 @@ class WarmupService:
         pdf_files = list(self.warmup_dir.glob("*.pdf"))
         return sorted(pdf_files)  # Sort for consistent order
     
-    def check_timeout(self) -> bool:
-        """Check if warmup has exceeded 5 minutes"""
-        if not self.start_time:
-            return False
-        
-        # Don't timeout if warmup has already completed successfully
-        if self.is_warmup_complete and self.warmup_status == "completed":
-            return False
-        
-        elapsed = (datetime.now() - self.start_time).total_seconds()
-        if elapsed > 300:  # 5 minutes
-            self.is_timed_out = True
-            return True
-        return False
+
     
     def _check_global_completion(self):
         """Check if warmup is already completed by another worker using Redis"""
         try:
             from upstash_redis import Redis
             import os
-            import json
             
             # Get Redis connection
             redis_url = os.getenv('UPSTASH_REDIS_REST_URL')
@@ -72,95 +47,44 @@ class WarmupService:
             
             redis_conn = Redis(url=redis_url, token=redis_token)
             
-            # Check if warmup completion data exists in Redis
-            completion_data = redis_conn.get("warmup:completion")
+            # Check if warmup is completed
+            status = redis_conn.get("warmup:status")
             
-            if completion_data:
-                # Parse the completion data
-                completion_data = json.loads(completion_data)
-                
-                # Restore warmup state
-                self.warmup_status = completion_data.get('status', 'completed')
-                self.is_warmup_complete = completion_data.get('is_warmup_complete', True)
-                self.warmup_results = completion_data.get('results', [])
-                self.warmup_errors = completion_data.get('errors', [])
-                self.start_time = datetime.fromisoformat(completion_data['start_time']) if completion_data.get('start_time') else None
-                self.end_time = datetime.fromisoformat(completion_data['end_time']) if completion_data.get('end_time') else None
-                self.total_steps = completion_data.get('total_steps', 0)
-                self.completed_steps = completion_data.get('completed_steps', 0)
-                self.current_step = completion_data.get('current_step', 'Completed')
-                self.is_timed_out = completion_data.get('is_timed_out', False)
-                
+            if status and status == "ready":
+                self.warmup_status = "ready"
                 print("🔥 Warmup already completed by another worker (Redis)")
         except Exception as e:
             print(f"⚠️  Could not check global completion: {e}")
     
-    def _save_global_completion(self):
-        """Save warmup completion status to Redis"""
+    def _save_redis_status(self, status: str):
+        """Save warmup status to Redis"""
         try:
             from upstash_redis import Redis
             import os
-            import json
             
             # Get Redis connection
             redis_url = os.getenv('UPSTASH_REDIS_REST_URL')
             redis_token = os.getenv('UPSTASH_REDIS_REST_TOKEN')
             
             if not redis_url or not redis_token:
-                print("⚠️  Could not save global completion: Missing Redis credentials")
+                print("⚠️  Could not save Redis status: Missing Redis credentials")
                 return
             
             redis_conn = Redis(url=redis_url, token=redis_token)
             
-            # Prepare completion data
-            completion_data = {
-                'status': self.warmup_status,
-                'is_warmup_complete': self.is_warmup_complete,
-                'results': self.warmup_results,
-                'errors': self.warmup_errors,
-                'start_time': self.start_time.isoformat() if self.start_time else None,
-                'end_time': self.end_time.isoformat() if self.end_time else None,
-                'total_steps': self.total_steps,
-                'completed_steps': self.completed_steps,
-                'current_step': self.current_step,
-                'is_timed_out': self.is_timed_out
-            }
-            
-            # Save to Redis with 24-hour expiration
-            redis_conn.setex("warmup:completion", 86400, json.dumps(completion_data))
-            print("💾 Warmup completion status saved to Redis")
+            # Save status to Redis with 24-hour expiration
+            redis_conn.setex("warmup:status", 86400, status)
+            print(f"💾 Warmup status saved to Redis: {status}")
                 
         except Exception as e:
-            print(f"⚠️  Could not save global completion: {e}")
+            print(f"⚠️  Could not save Redis status: {e}")
     
-    def force_complete(self):
-        """Force complete warmup due to timeout"""
-        self.warmup_status = "timed_out"
-        self.is_warmup_complete = True
-        self.end_time = datetime.now()
-        self.warmup_errors.append({
-            "file": "warmup_timeout",
-            "error": "Warmup process timed out after 5 minutes",
-            "timestamp": datetime.now().isoformat()
-        })
-        
-        # Save global completion status
-        self._save_global_completion()
-        
-        # Clean up lock file
-        try:
-            lock_file = Path("/tmp/warmup.lock")
-            if lock_file.exists():
-                lock_file.unlink()
-        except:
-            pass
-        
-        print("⏰ Warmup process timed out after 5 minutes")
+
     
     def start_warmup(self):
         """Start warmup process in background thread"""
         # Don't start if already in progress or completed
-        if self.warmup_status == "in_progress" or self.is_warmup_complete:
+        if self.warmup_status == "in_progress" or self.warmup_status == "ready":
             return
         
         # Use a file lock to ensure only one warmup process runs
@@ -178,14 +102,9 @@ class WarmupService:
             # Create lock file
             lock_file.touch()
             
+            # Set status to in_progress
             self.warmup_status = "in_progress"
-            self.start_time = datetime.now()
-            self.warmup_results = []
-            self.warmup_errors = []
-            self.is_timed_out = False
-            self.completed_steps = 0
-            self.total_steps = 0
-            self.current_step = ""
+            self._save_redis_status("in_progress")
             
             # Start warmup in background thread
             thread = threading.Thread(target=self._run_warmup, daemon=True)
@@ -195,13 +114,7 @@ class WarmupService:
             print(f"⚠️  Could not create warmup lock: {e}")
             # Continue without lock if we can't create it
             self.warmup_status = "in_progress"
-            self.start_time = datetime.now()
-            self.warmup_results = []
-            self.warmup_errors = []
-            self.is_timed_out = False
-            self.completed_steps = 0
-            self.total_steps = 0
-            self.current_step = ""
+            self._save_redis_status("in_progress")
             
             thread = threading.Thread(target=self._run_warmup, daemon=True)
             thread.start()
@@ -315,67 +228,11 @@ class WarmupService:
             warmup_files = self.get_warmup_files()
             if not warmup_files:
                 print("⚠️  No warmup files found")
-                self.warmup_status = "no_files"
-                self.is_warmup_complete = True
-                self.end_time = datetime.now()
+                self.warmup_status = "ready"
+                self._save_redis_status("ready")
                 return
             
             print(f"📁 Found {len(warmup_files)} warmup files")
-            
-            # Calculate total steps: warmup files + sync test + redis test + async test
-            self.total_steps = len(warmup_files) + 3  # +3 for sync, redis, and async tests
-            
-            # Process each warmup file to load models
-            for i, pdf_file in enumerate(warmup_files, 1):
-                # Check for timeout
-                if self.check_timeout():
-                    self.force_complete()
-                    return
-                
-                self.current_step = f"Processing warmup file {i}/{len(warmup_files)}: {pdf_file.name}"
-                try:
-                    print(f"🔄 {self.current_step}")
-                    
-                    # Create temporary directory for processing
-                    temp_dir = tempfile.mkdtemp()
-                    temp_path = Path(temp_dir)
-                    
-                    try:
-                        # Process the file using pdf_processor to load models
-                        doc = pdf_processor.process_pdf(pdf_file, temp_path)
-                        
-                        # Store result
-                        self.warmup_results.append({
-                            "file": pdf_file.name,
-                            "status": "success",
-                            "timestamp": datetime.now().isoformat()
-                        })
-                        
-                        print(f"✅ Warmup file {pdf_file.name} processed successfully")
-                        
-                    finally:
-                        # Clean up temporary directory
-                        try:
-                            shutil.rmtree(temp_dir)
-                        except:
-                            pass
-                    
-                    self.completed_steps += 1
-                    
-                except Exception as e:
-                    error_msg = f"Error processing {pdf_file.name}: {str(e)}"
-                    print(f"❌ {error_msg}")
-                    self.warmup_errors.append({
-                        "file": pdf_file.name,
-                        "error": str(e),
-                        "timestamp": datetime.now().isoformat()
-                    })
-                    self.completed_steps += 1
-            
-            # Check for timeout before endpoint tests
-            if self.check_timeout():
-                self.force_complete()
-                return
             
             # Test API endpoints
             if warmup_files:
@@ -383,81 +240,26 @@ class WarmupService:
                 print(f"🧪 Testing API endpoints with {test_file.name}...")
                 
                 # Test synchronous OCR with single file
-                self.current_step = "Testing synchronous OCR endpoint"
                 sync_success = self._test_sync_ocr(test_file)
-                self.completed_steps += 1
-                
-                # Check for timeout
-                if self.check_timeout():
-                    self.force_complete()
-                    return
-                
-                # Test Redis connection
-                self.current_step = "Testing Redis connection"
-                redis_success = self._test_redis_connection()
-                self.completed_steps += 1
-                
-                # Check for timeout
-                if self.check_timeout():
-                    self.force_complete()
-                    return
                 
                 # Test asynchronous OCR with multiple files (up to 2 files)
                 async_test_files = warmup_files[:2]  # Use up to 2 files for async testing
-                self.current_step = f"Testing asynchronous OCR with {len(async_test_files)} files"
                 async_success = self._test_async_ocr_multiple(async_test_files)
-                self.completed_steps += 1
                 
-                # Store endpoint test results
-                self.warmup_results.append({
-                    "file": "sync_ocr_test",
-                    "status": "success" if sync_success else "failed",
-                    "timestamp": datetime.now().isoformat()
-                })
-                
-                self.warmup_results.append({
-                    "file": "async_ocr_test",
-                    "status": "success" if async_success else "failed",
-                    "timestamp": datetime.now().isoformat()
-                })
-                
-                self.warmup_results.append({
-                    "file": "redis_test",
-                    "status": "success" if redis_success else "failed",
-                    "timestamp": datetime.now().isoformat()
-                })
-                
-                # Mark as ready if sync OCR works, async is optional (depends on Redis)
+                # Mark as ready if sync OCR works
                 if sync_success:
-                    if async_success:
-                        self.warmup_status = "completed"
-                        self.is_warmup_complete = True
-                        print("🎉 Warmup process completed! Both OCR endpoints tested successfully. API is ready to accept requests.")
-                    else:
-                        self.warmup_status = "completed"
-                        self.is_warmup_complete = True
-                        print("🎉 Warmup process completed! Synchronous OCR working. Async OCR requires Redis connection. API is ready to accept requests.")
-                    
-                    # Save completion status to Redis
-                    self._save_global_completion()
+                    self.warmup_status = "ready"
+                    self._save_redis_status("ready")
+                    print("🎉 Warmup process completed! API is ready to accept requests.")
                 else:
                     self.warmup_status = "failed"
+                    self._save_redis_status("failed")
                     print("❌ Warmup process failed: Synchronous OCR endpoint test failed")
-                    if not sync_success:
-                        print("❌ Synchronous OCR endpoint test failed")
-                    if not async_success:
-                        print("⚠️  Asynchronous OCR endpoint test failed (Redis connection issue)")
             else:
-                # No warmup files, mark as completed
-                self.warmup_status = "completed"
-                self.is_warmup_complete = True
+                # No warmup files, mark as ready
+                self.warmup_status = "ready"
+                self._save_redis_status("ready")
                 print("🎉 Warmup process completed! (No warmup files to test)")
-                
-                # Save completion status to Redis
-                self._save_global_completion()
-            
-            self.end_time = datetime.now()
-            self.current_step = "Completed"
             
             # Clean up lock file
             try:
@@ -470,12 +272,7 @@ class WarmupService:
         except Exception as e:
             print(f"❌ Warmup process failed: {str(e)}")
             self.warmup_status = "failed"
-            self.warmup_errors.append({
-                "file": "warmup_process",
-                "error": str(e),
-                "timestamp": datetime.now().isoformat()
-            })
-            self.end_time = datetime.now()
+            self._save_redis_status("failed")
             
             # Clean up lock file on failure too
             try:
@@ -487,54 +284,13 @@ class WarmupService:
     
     def get_status(self) -> Dict:
         """Get current warmup status"""
-        # Check for timeout only if warmup is still in progress
-        if self.warmup_status == "in_progress" and self.check_timeout():
-            self.force_complete()
-        
-        status = {
-            "warmup_complete": self.is_warmup_complete,
-            "status": self.warmup_status,
-            "results": self.warmup_results,
-            "errors": self.warmup_errors,
-            "files_processed": len([r for r in self.warmup_results if r.get('file') not in ['sync_ocr_test', 'async_ocr_test', 'redis_test']]),
-            "files_failed": len(self.warmup_errors),
-            "endpoint_tests": {
-                "sync_ocr": next((r for r in self.warmup_results if r.get('file') == 'sync_ocr_test'), {}).get('status', 'not_tested'),
-                "async_ocr": next((r for r in self.warmup_results if r.get('file') == 'async_ocr_test'), {}).get('status', 'not_tested'),
-                "redis_connection": next((r for r in self.warmup_results if r.get('file') == 'redis_test'), {}).get('status', 'not_tested')
-            },
-            # Progress tracking
-            "total_steps": self.total_steps,
-            "completed_steps": self.completed_steps,
-            "progress_percentage": (self.completed_steps / self.total_steps * 100) if self.total_steps > 0 else 0,
-            "current_step": self.current_step,
-            "is_timed_out": self.is_timed_out
+        return {
+            "status": self.warmup_status
         }
-        
-        if self.start_time:
-            status["start_time"] = self.start_time.isoformat()
-            
-            # Calculate estimated remaining time
-            if self.total_steps > 0 and self.completed_steps > 0:
-                elapsed = (datetime.now() - self.start_time).total_seconds()
-                avg_time_per_step = elapsed / self.completed_steps
-                remaining_steps = self.total_steps - self.completed_steps
-                estimated_remaining = avg_time_per_step * remaining_steps
-                status["estimated_remaining_seconds"] = max(0, estimated_remaining)
-            else:
-                status["estimated_remaining_seconds"] = 0
-        
-        if self.end_time:
-            status["end_time"] = self.end_time.isoformat()
-            if self.start_time:
-                duration = (self.end_time - self.start_time).total_seconds()
-                status["duration_seconds"] = duration
-        
-        return status
     
     def is_ready(self) -> bool:
         """Check if API is ready to accept requests"""
-        return self.is_warmup_complete and self.warmup_status == "completed"
+        return self.warmup_status == "ready"
 
 
 # Global warmup service instance
