@@ -1,8 +1,11 @@
 import os
 import psutil
 import asyncio
+import queue
+import threading
 from datetime import datetime
 from typing import Dict, Optional
+from concurrent.futures import ThreadPoolExecutor
 from upstash_redis import Redis
 
 from src.models.job import Job, JobUpdate
@@ -20,12 +23,22 @@ class QueueManager:
         # Create Upstash Redis client
         self.redis_conn = Redis(url=self.redis_url, token=self.redis_token)
         
-        # Note: RQ doesn't work directly with Upstash Redis HTTP client
-        # We'll need to handle async operations differently
-        self.pdf_queue = None  # RQ queue not available with HTTP client
+        # Worker pool configuration
+        self.max_workers = int(os.getenv('RQ_WORKERS', 2))
+        print(f"🔧 Queue Manager: Using {self.max_workers} workers (from RQ_WORKERS)")
+        
+        # Create worker pool that respects RQ_WORKERS limit
+        self.executor = ThreadPoolExecutor(
+            max_workers=self.max_workers,
+            thread_name_prefix="pdf_worker"
+        )
         
         # Job management (in-memory only, no file persistence needed)
         self.jobs: Dict[str, Dict] = {}
+        
+        # Track active workers
+        self.active_workers = 0
+        self.worker_lock = threading.Lock()
 
 
 
@@ -165,7 +178,7 @@ class QueueManager:
         return self.jobs
 
     def get_queue_status(self) -> Dict:
-        """Get queue status and statistics (simulated since RQ doesn't work with HTTP Redis)"""
+        """Get queue status and statistics with proper worker pool info"""
         try:
             # Count jobs by status
             total_jobs = len(self.jobs)
@@ -174,7 +187,10 @@ class QueueManager:
             processing_jobs = len([j for j in self.jobs.values() if j.get('status') == 'processing'])
             queued_jobs = len([j for j in self.jobs.values() if j.get('status') == 'queued'])
             
-            # Get queue statistics
+            # Get queue statistics with proper worker info
+            with self.worker_lock:
+                active_workers = self.active_workers
+            
             queue_stats = {
                 "queue_name": "pdf_processing",
                 "total_jobs": total_jobs,
@@ -182,16 +198,22 @@ class QueueManager:
                 "failed_jobs": failed_jobs,
                 "processing_jobs": processing_jobs,
                 "queued_jobs": queued_jobs,
-                "workers": 1,  # Single worker since we're using threads
+                "max_workers": self.max_workers,
+                "active_workers": active_workers,
+                "available_workers": self.max_workers - active_workers,
             }
             
-            # Get worker information (simulated)
-            workers = [{
-                "name": "thread-worker-1",
-                "state": "active",
-                "current_job": "",
-                "last_heartbeat": datetime.utcnow().isoformat()
-            }]
+            # Get worker information from thread pool
+            workers = []
+            for i in range(self.max_workers):
+                worker_name = f"pdf_worker_{i+1}"
+                is_active = i < active_workers
+                workers.append({
+                    "name": worker_name,
+                    "state": "active" if is_active else "idle",
+                    "current_job": "",
+                    "last_heartbeat": datetime.utcnow().isoformat()
+                })
             
             # Get recent jobs
             recent_jobs = []
@@ -259,9 +281,15 @@ class QueueManager:
         # Add to jobs dictionary
         self.jobs[job_id] = job_data
         
-        # Start processing in background thread
+        # Submit job to worker pool (respects RQ_WORKERS limit)
         def process_job():
+            with self.worker_lock:
+                self.active_workers += 1
+                worker_name = f"pdf_worker_{self.active_workers}"
+            
             try:
+                print(f"🔧 Worker {worker_name} starting job {job_id} ({args[1] if len(args) > 1 else 'unknown'})")
+                
                 # Update status to processing
                 self.update_job_status(job_id, "processing", active=True, waiting=False)
                 
@@ -270,14 +298,19 @@ class QueueManager:
                 
                 # Update status to completed
                 self.update_job_status(job_id, "completed", active=False, waiting=False, result=result)
+                print(f"✅ Worker {worker_name} completed job {job_id}")
                 
             except Exception as e:
                 # Update status to failed
                 self.update_job_status(job_id, "failed", active=False, waiting=False, error=str(e))
+                print(f"❌ Worker {worker_name} failed job {job_id}: {e}")
+            finally:
+                with self.worker_lock:
+                    self.active_workers -= 1
         
-        # Start processing thread
-        thread = threading.Thread(target=process_job, daemon=True)
-        thread.start()
+        # Submit to thread pool (this will queue if all workers are busy)
+        future = self.executor.submit(process_job)
+        print(f"📋 Job {job_id} queued (active workers: {self.active_workers}/{self.max_workers})")
         
         # Return a mock job object
         class MockJob:
