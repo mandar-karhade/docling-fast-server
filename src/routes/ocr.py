@@ -72,7 +72,8 @@ async def process_pdf_ocr_async(file: UploadFile = File(...)):
         from src.services.rq_tasks import process_pdf_task
         rq_job = queue_manager.enqueue_job(
             process_pdf_task,
-            args=(file_content, file.filename),
+            file_content,  # First positional argument: PDF data
+            file.filename,  # Second positional argument: filename
             job_timeout='1h',  # 1 hour timeout
             result_ttl=3600,   # Keep result for 1 hour
             failure_ttl=3600   # Keep failed jobs for 1 hour

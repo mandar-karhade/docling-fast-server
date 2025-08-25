@@ -234,6 +234,13 @@ class QueueManager:
         # Generate a job ID
         job_id = str(uuid.uuid4())
         
+        # Filter out RQ-specific kwargs that shouldn't be passed to the task function
+        rq_kwargs = {
+            'job_timeout', 'result_ttl', 'failure_ttl', 'job_id', 'depends_on',
+            'timeout', 'retry', 'meta', 'description', 'at', 'in'
+        }
+        task_kwargs = {k: v for k, v in kwargs.items() if k not in rq_kwargs}
+        
         # Create job entry
         job_data = {
             "id": job_id,
@@ -241,7 +248,7 @@ class QueueManager:
             "created_at": datetime.utcnow().isoformat(),
             "updated_at": datetime.utcnow().isoformat(),
             "args": list(args),  # Keep actual args, don't convert to strings
-            "kwargs": kwargs,
+            "kwargs": task_kwargs,  # Only pass task-specific kwargs
             "result": None,
             "logs": [],
             "active": False,
@@ -258,8 +265,8 @@ class QueueManager:
                 # Update status to processing
                 self.update_job_status(job_id, "processing", active=True, waiting=False)
                 
-                # Execute the function
-                result = func(*args, **kwargs)
+                # Execute the function with filtered kwargs
+                result = func(*args, **task_kwargs)
                 
                 # Update status to completed
                 self.update_job_status(job_id, "completed", active=False, waiting=False, result=result)
