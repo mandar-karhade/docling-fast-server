@@ -16,10 +16,10 @@ if [ -z "$OPENAI_API_KEY" ]; then
     exit 1
 fi
 
-# Validate Redis REST API credentials
+# Validate Redis REST API credentials (optional - only needed for persistence)
 if [ -z "$UPSTASH_REDIS_REST_URL" ] || [ -z "$UPSTASH_REDIS_REST_TOKEN" ]; then
-    echo "❌ Error: UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN environment variables are required"
-    exit 1
+    echo "⚠️  Warning: UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN not set"
+    echo "   Job queue will use in-memory storage (jobs lost on restart)"
 fi
 
 echo "📊 Configuration:"
@@ -34,32 +34,65 @@ echo "🔧 Starting services..."
 echo "   - API server (0.0.0.0:8000) with Upstash Redis support"
 echo ""
 
-# Test Redis connection
+# Test Redis connection (optional for job persistence)
 echo "🔍 Testing Redis connection..."
 if python3 -c "
 from upstash_redis import Redis
 import os
 try:
-    r = Redis(url=os.environ['UPSTASH_REDIS_REST_URL'], token=os.environ['UPSTASH_REDIS_REST_TOKEN'])
+    r = Redis(url=os.environ.get('UPSTASH_REDIS_REST_URL', ''), token=os.environ.get('UPSTASH_REDIS_REST_TOKEN', ''))
     r.ping()
     print('✅ Redis connection successful')
 except Exception as e:
-    print(f'❌ Redis connection failed: {e}')
-    exit(1)
-"; then
+    print('⚠️ Redis connection failed - using in-memory job storage')
+" 2>/dev/null; then
     echo "✅ Redis connection verified"
 else
-    echo "❌ Redis connection failed"
-    echo "   Some features may not be available"
+    echo "⚠️ Redis connection failed - continuing with in-memory job storage"
 fi
 
-echo "🚀 Starting API server..."
+echo ""
+echo "🔥 Running container-level warmup process..."
+echo "   This ensures models are downloaded and endpoints tested once before workers start"
+
+# Run warmup synchronously before starting any workers
+python3 -c "
+import sys
+import os
+
+# Set up environment
+sys.path.insert(0, '/app')
+os.chdir('/app')
+
+try:
+    from src.services.warmup_service import WarmupService
+    
+    print('🔥 Starting container warmup...')
+    
+    # Create warmup service without Redis coordination
+    warmup = WarmupService()
+    warmup.disable_redis_coordination()
+    
+    # Run warmup synchronously (blocking)
+    warmup.run_warmup_sync()
+    
+    print('✅ Container warmup completed successfully')
+    
+except Exception as e:
+    print(f'❌ Warmup failed: {e}')
+    import traceback
+    traceback.print_exc()
+    sys.exit(1)
+"
+
+echo ""
+echo "🚀 Starting API server with pre-warmed container..."
 echo "   Host: 0.0.0.0"
 echo "   Port: 8000"
 echo "   Workers: $UVICORN_WORKERS"
 echo ""
 
-# Start the API server
+# Start the API server (warmup already completed)
 exec uvicorn main:app \
     --host 0.0.0.0 \
     --port 8000 \

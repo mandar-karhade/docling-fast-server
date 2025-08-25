@@ -31,16 +31,20 @@ app.include_router(placeholder.router, tags=["placeholder"])
 
 @app.on_event("startup")
 async def startup_event():
-    """Start warmup process when API starts"""
+    """Start warmup process when API starts (if not done at container level)"""
     print("🚀 API starting up...")
     
-    # Start warmup process in background thread
-    def start_warmup():
-        warmup_service.start_warmup()
-    
-    thread = threading.Thread(target=start_warmup, daemon=True)
-    thread.start()
-    print("🔥 Warmup process started in background")
+    # Only start warmup if using Redis coordination (container-level warmup is done in entrypoint.sh)
+    if warmup_service.use_redis_coordination:
+        # Start warmup process in background thread
+        def start_warmup():
+            warmup_service.start_warmup()
+        
+        thread = threading.Thread(target=start_warmup, daemon=True)
+        thread.start()
+        print("🔥 Warmup process started in background")
+    else:
+        print("🔥 Using container-level warmup - worker warmup skipped")
 
 
 if __name__ == "__main__":

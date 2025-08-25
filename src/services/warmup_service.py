@@ -14,37 +14,68 @@ from .pdf_processor import pdf_processor
 
 
 class WarmupService:
-    def __init__(self):
+    def __init__(self, use_redis_coordination=None):
         self.warmup_dir = Path("warmup_files")
         self.warmup_status = "not_started"
         self.api_base_url = "http://localhost:8000"
         
-        # Initialize Redis connection for worker coordination
-        self.redis_url = os.getenv('UPSTASH_REDIS_REST_URL')
-        self.redis_token = os.getenv('UPSTASH_REDIS_REST_TOKEN')
+        # Determine if we should use Redis coordination
+        if use_redis_coordination is None:
+            # Auto-detect: use Redis if credentials are available
+            use_redis_coordination = bool(os.getenv('UPSTASH_REDIS_REST_URL') and os.getenv('UPSTASH_REDIS_REST_TOKEN'))
         
-        if not self.redis_url or not self.redis_token:
-            print("⚠️  WARNING: Redis credentials not found, falling back to local coordination")
-            self.redis_conn = None
-        else:
-            try:
-                self.redis_conn = Redis(url=self.redis_url, token=self.redis_token)
-                print("✅ Redis connection established for warmup coordination")
-            except Exception as e:
-                print(f"⚠️  WARNING: Could not connect to Redis: {e}, falling back to local coordination")
+        self.use_redis_coordination = use_redis_coordination
+        
+        if self.use_redis_coordination:
+            # Initialize Redis connection for worker coordination
+            self.redis_url = os.getenv('UPSTASH_REDIS_REST_URL')
+            self.redis_token = os.getenv('UPSTASH_REDIS_REST_TOKEN')
+            
+            if not self.redis_url or not self.redis_token:
+                print("⚠️  WARNING: Redis credentials not found, disabling Redis coordination")
                 self.redis_conn = None
-        
-        # Redis keys for coordination
-        self.WARMUP_STATUS_KEY = "docling:warmup:status"
-        self.WARMUP_LOCK_KEY = "docling:warmup:lock"
-        self.WARMUP_WORKER_KEY = "docling:warmup:worker_id"
+                self.use_redis_coordination = False
+            else:
+                try:
+                    self.redis_conn = Redis(url=self.redis_url, token=self.redis_token)
+                    print("✅ Redis connection established for warmup coordination")
+                except Exception as e:
+                    print(f"⚠️  WARNING: Could not connect to Redis: {e}, disabling Redis coordination")
+                    self.redis_conn = None
+                    self.use_redis_coordination = False
+            
+            # Redis keys for coordination
+            self.WARMUP_STATUS_KEY = "docling:warmup:status"
+            self.WARMUP_LOCK_KEY = "docling:warmup:lock"
+            self.WARMUP_WORKER_KEY = "docling:warmup:worker_id"
+        else:
+            print("📝 Redis coordination disabled - using container-level warmup")
+            self.redis_conn = None
         
         # Worker identification
         self.worker_id = f"worker_{os.getpid()}"
         
-        # Check if warmup is already completed by another worker
-        self._check_redis_warmup_status()
+        # Check if warmup is already completed by another worker (only if using Redis)
+        if self.use_redis_coordination:
+            self._check_redis_warmup_status()
         
+    def disable_redis_coordination(self):
+        """Disable Redis coordination and use container-level warmup"""
+        self.use_redis_coordination = False
+        self.redis_conn = None
+        print("🔒 Redis coordination disabled - using container-level warmup")
+    
+    def run_warmup_sync(self):
+        """Run warmup process synchronously (blocking) without threading"""
+        print("🔥 Running synchronous warmup process...")
+        self.warmup_status = "in_progress"
+        
+        try:
+            self._run_warmup()
+        except Exception as e:
+            print(f"❌ Synchronous warmup failed: {e}")
+            raise
+    
     def get_warmup_files(self) -> List[Path]:
         """Get list of PDF files in warmup directory"""
         if not self.warmup_dir.exists():
@@ -76,8 +107,7 @@ class WarmupService:
     
     def _set_redis_status(self, status: str):
         """Save warmup status to Redis for worker coordination"""
-        if not self.redis_conn:
-            print(f"⚠️  No Redis connection, status not saved: {status}")
+        if not self.use_redis_coordination or not self.redis_conn:
             return
         
         try:
@@ -91,9 +121,8 @@ class WarmupService:
     
     def _acquire_redis_lock(self) -> bool:
         """Try to acquire Redis lock for warmup process"""
-        if not self.redis_conn:
-            print("⚠️  No Redis connection, cannot acquire lock")
-            return True  # Allow warmup to proceed if no Redis
+        if not self.use_redis_coordination or not self.redis_conn:
+            return True  # Allow warmup to proceed if no Redis coordination
         
         try:
             # Try to set a lock with 10 minute expiration
@@ -111,7 +140,7 @@ class WarmupService:
     
     def _release_redis_lock(self):
         """Release Redis lock after warmup completion or failure"""
-        if not self.redis_conn:
+        if not self.use_redis_coordination or not self.redis_conn:
             return
         
         try:
@@ -126,7 +155,15 @@ class WarmupService:
             print(f"⚠️  Error releasing Redis lock: {e}")
     
     def start_warmup(self):
-        """Start warmup process in background thread with Redis coordination"""
+        """Start warmup process - either with Redis coordination or locally"""
+        
+        if not self.use_redis_coordination:
+            # Container-level warmup - skip if already done or should be done at container level
+            print("🔥 Warmup should be done at container level - skipping worker warmup")
+            self.warmup_status = "ready"  # Assume container warmup was done
+            return
+        
+        # Redis coordination mode
         # Re-check Redis status in case it was updated by another worker
         self._check_redis_warmup_status()
         
@@ -359,7 +396,7 @@ class WarmupService:
                 self._set_redis_status("ready")
                 print("🎉 Warmup process completed! (No warmup files to test)")
             
-            # Release Redis lock
+            # Release Redis lock (only if using Redis coordination)
             self._release_redis_lock()
             
         except Exception as e:
@@ -367,35 +404,45 @@ class WarmupService:
             self.warmup_status = "failed"
             self._set_redis_status("failed")
             
-            # Release Redis lock on failure
+            # Release Redis lock on failure (only if using Redis coordination)
             self._release_redis_lock()
     
     def get_status(self) -> Dict:
-        """Get current warmup status, checking Redis for latest updates"""
-        # Check Redis for latest status
-        self._check_redis_warmup_status()
+        """Get current warmup status"""
         
-        redis_status = "unknown"
-        redis_worker = "unknown"
-        
-        if self.redis_conn:
-            try:
-                redis_status = self.redis_conn.get(self.WARMUP_STATUS_KEY) or "not_started"
-                redis_worker = self.redis_conn.get(self.WARMUP_WORKER_KEY) or "unknown"
-            except Exception as e:
-                print(f"⚠️  Could not get status from Redis: {e}")
-        
-        return {
+        result = {
             "status": self.warmup_status,
             "worker_id": self.worker_id,
-            "redis_status": redis_status,
-            "redis_worker": redis_worker
+            "coordination_mode": "redis" if self.use_redis_coordination else "container-level"
         }
+        
+        if self.use_redis_coordination:
+            # Check Redis for latest status
+            self._check_redis_warmup_status()
+            
+            redis_status = "unknown"
+            redis_worker = "unknown"
+            
+            if self.redis_conn:
+                try:
+                    redis_status = self.redis_conn.get(self.WARMUP_STATUS_KEY) or "not_started"
+                    redis_worker = self.redis_conn.get(self.WARMUP_WORKER_KEY) or "unknown"
+                except Exception as e:
+                    print(f"⚠️  Could not get status from Redis: {e}")
+            
+            result.update({
+                "redis_status": redis_status,
+                "redis_worker": redis_worker
+            })
+        
+        return result
     
     def is_ready(self) -> bool:
         """Check if API is ready to accept requests"""
-        # Check Redis for latest status before returning
-        self._check_redis_warmup_status()
+        if self.use_redis_coordination:
+            # Check Redis for latest status before returning
+            self._check_redis_warmup_status()
+        
         return self.warmup_status == "ready"
 
 
