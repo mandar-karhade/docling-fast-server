@@ -17,9 +17,13 @@ class WarmupService:
         self.warmup_dir = Path("warmup_files")
         self.warmup_status = "not_started"
         self.api_base_url = "http://localhost:8000"
+        self.status_file = Path("/tmp/warmup_status.txt")
+        
+        # Clear any old status on container startup
+        self._clear_status_file()
         
         # Check if warmup is already completed by another worker
-        self._check_global_completion()
+        self._check_worker_status()
         
     def get_warmup_files(self) -> List[Path]:
         """Get list of PDF files in warmup directory"""
@@ -29,57 +33,33 @@ class WarmupService:
         pdf_files = list(self.warmup_dir.glob("*.pdf"))
         return sorted(pdf_files)  # Sort for consistent order
     
-
-    
-    def _check_global_completion(self):
-        """Check if warmup is already completed by another worker using Redis"""
+    def _clear_status_file(self):
+        """Clear status file on container startup"""
         try:
-            from upstash_redis import Redis
-            import os
-            
-            # Get Redis connection
-            redis_url = os.getenv('UPSTASH_REDIS_REST_URL')
-            redis_token = os.getenv('UPSTASH_REDIS_REST_TOKEN')
-            
-            if not redis_url or not redis_token:
-                print("⚠️  Could not check global completion: Missing Redis credentials")
-                return
-            
-            redis_conn = Redis(url=redis_url, token=redis_token)
-            
-            # Check if warmup is completed
-            status = redis_conn.get("warmup:status")
-            
-            if status and status == "ready":
-                self.warmup_status = "ready"
-                print("🔥 Warmup already completed by another worker (Redis)")
+            if self.status_file.exists():
+                self.status_file.unlink()
+                print("🧹 Cleared old status file on container startup")
         except Exception as e:
-            print(f"⚠️  Could not check global completion: {e}")
+            print(f"⚠️  Could not clear status file: {e}")
     
-    def _save_redis_status(self, status: str):
-        """Save warmup status to Redis"""
+    def _check_worker_status(self):
+        """Check if warmup is already completed by another worker"""
         try:
-            from upstash_redis import Redis
-            import os
-            
-            # Get Redis connection
-            redis_url = os.getenv('UPSTASH_REDIS_REST_URL')
-            redis_token = os.getenv('UPSTASH_REDIS_REST_TOKEN')
-            
-            if not redis_url or not redis_token:
-                print("⚠️  Could not save Redis status: Missing Redis credentials")
-                return
-            
-            redis_conn = Redis(url=redis_url, token=redis_token)
-            
-            # Save status to Redis with 24-hour expiration
-            redis_conn.setex("warmup:status", 86400, status)
-            print(f"💾 Warmup status saved to Redis: {status}")
-                
+            if self.status_file.exists():
+                status = self.status_file.read_text().strip()
+                if status == "ready":
+                    self.warmup_status = "ready"
+                    print("🔥 Warmup already completed by another worker")
         except Exception as e:
-            print(f"⚠️  Could not save Redis status: {e}")
+            print(f"⚠️  Could not check worker status: {e}")
     
-
+    def _save_worker_status(self, status: str):
+        """Save warmup status to file for worker sharing"""
+        try:
+            self.status_file.write_text(status)
+            print(f"💾 Worker status saved to file: {status}")
+        except Exception as e:
+            print(f"⚠️  Could not save worker status: {e}")
     
     def start_warmup(self):
         """Start warmup process in background thread"""
@@ -104,7 +84,7 @@ class WarmupService:
             
             # Set status to in_progress
             self.warmup_status = "in_progress"
-            self._save_redis_status("in_progress")
+            self._save_worker_status("in_progress")
             
             # Start warmup in background thread
             thread = threading.Thread(target=self._run_warmup, daemon=True)
@@ -114,7 +94,7 @@ class WarmupService:
             print(f"⚠️  Could not create warmup lock: {e}")
             # Continue without lock if we can't create it
             self.warmup_status = "in_progress"
-            self._save_redis_status("in_progress")
+            self._save_worker_status("in_progress")
             
             thread = threading.Thread(target=self._run_warmup, daemon=True)
             thread.start()
@@ -249,16 +229,16 @@ class WarmupService:
                 # Mark as ready if sync OCR works
                 if sync_success:
                     self.warmup_status = "ready"
-                    self._save_redis_status("ready")
+                    self._save_worker_status("ready")
                     print("🎉 Warmup process completed! API is ready to accept requests.")
                 else:
                     self.warmup_status = "failed"
-                    self._save_redis_status("failed")
+                    self._save_worker_status("failed")
                     print("❌ Warmup process failed: Synchronous OCR endpoint test failed")
             else:
                 # No warmup files, mark as ready
                 self.warmup_status = "ready"
-                self._save_redis_status("ready")
+                self._save_worker_status("ready")
                 print("🎉 Warmup process completed! (No warmup files to test)")
             
             # Clean up lock file
@@ -272,7 +252,7 @@ class WarmupService:
         except Exception as e:
             print(f"❌ Warmup process failed: {str(e)}")
             self.warmup_status = "failed"
-            self._save_redis_status("failed")
+            self._save_worker_status("failed")
             
             # Clean up lock file on failure too
             try:
