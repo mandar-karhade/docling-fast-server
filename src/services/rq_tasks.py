@@ -4,20 +4,12 @@ import shutil
 from pathlib import Path
 from datetime import datetime
 import json
-from rq import get_current_job
 from src.services.pdf_processor import pdf_processor
 
 def process_pdf_task(pdf_data: bytes, filename: str):
     """
-    RQ task to process PDF asynchronously
+    Task to process PDF asynchronously (compatible with simulated queue system)
     """
-    # Get the current RQ job for progress tracking
-    rq_job = get_current_job()
-    
-    # Store filename in job metadata
-    rq_job.meta['filename'] = filename
-    rq_job.save_meta()
-    
     # Create temporary directory for processing
     temp_dir = tempfile.mkdtemp()
     temp_path = Path(temp_dir)
@@ -29,7 +21,7 @@ def process_pdf_task(pdf_data: bytes, filename: str):
             f.write(pdf_data)
         
         # Process the PDF
-        print(f"📄 Processing {filename} with RQ job ID: {rq_job.id}")
+        print(f"📄 Processing {filename} in async task")
         doc = pdf_processor.process_pdf(pdf_path, temp_path)
         
         # Generate results
@@ -37,6 +29,7 @@ def process_pdf_task(pdf_data: bytes, filename: str):
         results = pdf_processor.get_output(doc, pdf_stem, "ocr")
         
         if results:
+            print(f"✅ Successfully processed {filename} in async task")
             return {
                 "status": "success",
                 "filename": filename,
@@ -46,7 +39,7 @@ def process_pdf_task(pdf_data: bytes, filename: str):
             raise Exception("Failed to create output files")
             
     except Exception as e:
-        error_msg = f"RQ task error for job {rq_job.id}: {e}"
+        error_msg = f"Async task error for {filename}: {e}"
         print(f"❌ {error_msg}")
         raise e
     finally:

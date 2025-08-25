@@ -240,12 +240,13 @@ class QueueManager:
             "status": "queued",
             "created_at": datetime.utcnow().isoformat(),
             "updated_at": datetime.utcnow().isoformat(),
-            "args": [str(arg) for arg in args],
+            "args": list(args),  # Keep actual args, don't convert to strings
             "kwargs": kwargs,
             "result": None,
             "logs": [],
             "active": False,
-            "waiting": True
+            "waiting": True,
+            "filename": args[1] if len(args) > 1 else "Unknown"  # Store filename for easier access
         }
         
         # Add to jobs dictionary

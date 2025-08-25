@@ -9,36 +9,42 @@ router = APIRouter()
 
 @router.get("/jobs/{job_id}")
 async def get_job_status(job_id: str):
-    """Get job status and results using RQ job ID"""
+    """Get job status and results from simulated queue system"""
     try:
-        # Get job from RQ
-        rq_job = queue_manager.get_rq_job(job_id)
-        if not rq_job:
+        # Get job from simulated queue system
+        job_data = queue_manager.get_job(job_id)
+        if not job_data:
             raise HTTPException(status_code=404, detail="Job not found")
         
-        # Get job status
-        status = rq_job.get_status()
+        # Map simulated job status to RQ-compatible status
+        job_status = job_data.get("status", "unknown")
+        if job_status == "completed":
+            rq_status = "finished"
+        elif job_status == "processing":
+            rq_status = "started"
+        elif job_status == "queued":
+            rq_status = "queued"
+        elif job_status == "failed":
+            rq_status = "failed"
+        else:
+            rq_status = job_status
         
-        # Get result if job is finished
-        result = None
-        error = None
-        if status == 'finished':
-            try:
-                result = rq_job.result
-            except Exception as e:
-                error = str(e)
-        elif status == 'failed':
-            error = str(rq_job.exc_info) if rq_job.exc_info else "Unknown error"
+        # Extract result and error
+        result = job_data.get("result")
+        error = job_data.get("error")
+        
+        # Get filename from job data
+        filename = job_data.get("filename", "Unknown")
         
         return {
             "job_id": job_id,
-            "status": status,
-            "created_at": rq_job.created_at.isoformat() if rq_job.created_at else None,
-            "started_at": rq_job.started_at.isoformat() if rq_job.started_at else None,
-            "ended_at": rq_job.ended_at.isoformat() if rq_job.ended_at else None,
+            "status": rq_status,
+            "created_at": job_data.get("created_at"),
+            "started_at": None,  # Not tracked in simulated system
+            "ended_at": job_data.get("updated_at") if job_status in ["completed", "failed"] else None,
             "result": result,
             "error": error,
-            "filename": rq_job.meta.get('filename', 'Unknown') if rq_job.meta else 'Unknown'
+            "filename": filename
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting job status: {str(e)}")

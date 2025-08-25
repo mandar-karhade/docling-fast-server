@@ -217,16 +217,17 @@ class WarmupService:
             return False
     
     def _test_async_ocr_multiple(self, pdf_files: list) -> bool:
-        """Test asynchronous OCR endpoint with multiple PDFs"""
+        """Test asynchronous OCR endpoint with multiple PDFs and wait for completion"""
         try:
             print(f"🧪 Testing /ocr/async endpoint (asynchronous) with {len(pdf_files)} PDF files...")
             
-            success_count = 0
+            submitted_jobs = []
             total_files = len(pdf_files)
             
+            # Submit all jobs first
             for pdf_file in pdf_files:
                 try:
-                    print(f"   📄 Testing {pdf_file.name}...")
+                    print(f"   📄 Submitting {pdf_file.name}...")
                     
                     # Submit async job
                     with open(pdf_file, 'rb') as f:
@@ -238,23 +239,75 @@ class WarmupService:
                         job_id = result.get('job_id')
                         
                         if job_id:
-                            print(f"   ✅ /ocr/async job submitted for {pdf_file.name}, job_id: {job_id}")
-                            success_count += 1
+                            print(f"   ✅ Job submitted for {pdf_file.name}, job_id: {job_id}")
+                            submitted_jobs.append({'job_id': job_id, 'filename': pdf_file.name})
                         else:
-                            print(f"   ❌ /ocr/async job failed for {pdf_file.name}: No job_id returned")
+                            print(f"   ❌ Job submission failed for {pdf_file.name}: No job_id returned")
                     else:
-                        print(f"   ❌ /ocr/async job failed for {pdf_file.name}: HTTP {response.status_code}")
+                        print(f"   ❌ Job submission failed for {pdf_file.name}: HTTP {response.status_code}")
                         
                 except Exception as e:
-                    print(f"   ❌ /ocr/async job error for {pdf_file.name}: {str(e)}")
+                    print(f"   ❌ Job submission error for {pdf_file.name}: {str(e)}")
             
-            # Consider test successful if at least 50% of files worked
-            success_rate = success_count / total_files if total_files > 0 else 0
+            if not submitted_jobs:
+                print("❌ No jobs were submitted successfully")
+                return False
+            
+            # Now wait for jobs to complete and check their status
+            print(f"   ⏳ Waiting for {len(submitted_jobs)} jobs to complete (max 2 minutes)...")
+            success_count = 0
+            max_wait_time = 120  # 120 seconds (2 minutes) max wait time
+            wait_interval = 5   # Check every 5 seconds
+            
+            for job_info in submitted_jobs:
+                job_id = job_info['job_id']
+                filename = job_info['filename']
+                waited_time = 0
+                
+                while waited_time < max_wait_time:
+                    try:
+                        # Check job status
+                        status_response = requests.get(f"{self.api_base_url}/jobs/{job_id}", timeout=10)
+                        
+                        if status_response.status_code == 200:
+                            status_result = status_response.json()
+                            job_status = status_result.get('status', 'unknown')
+                            
+                            if job_status == 'finished':
+                                result = status_result.get('result')
+                                if result and result.get('status') == 'success':
+                                    print(f"   ✅ Job completed successfully for {filename}")
+                                    success_count += 1
+                                else:
+                                    print(f"   ❌ Job finished but failed for {filename}: {result}")
+                                break
+                            elif job_status == 'failed':
+                                error_msg = status_result.get('error', 'Unknown error')
+                                print(f"   ❌ Job failed for {filename}: {error_msg}")
+                                break
+                            elif job_status in ['queued', 'started']:
+                                print(f"   ⏳ Job {job_status} for {filename}, waiting...")
+                            else:
+                                print(f"   ❓ Unknown job status for {filename}: {job_status}")
+                        else:
+                            print(f"   ⚠️  Could not check status for {filename}: HTTP {status_response.status_code}")
+                            
+                    except Exception as e:
+                        print(f"   ⚠️  Error checking status for {filename}: {e}")
+                    
+                    time.sleep(wait_interval)
+                    waited_time += wait_interval
+                
+                if waited_time >= max_wait_time:
+                    print(f"   ⏰ Timeout waiting for {filename} to complete")
+            
+            # Consider test successful if at least 50% of jobs completed successfully
+            success_rate = success_count / len(submitted_jobs) if submitted_jobs else 0
             if success_rate >= 0.5:
-                print(f"✅ /ocr/async endpoint test passed: {success_count}/{total_files} files processed successfully")
+                print(f"✅ /ocr/async endpoint test passed: {success_count}/{len(submitted_jobs)} jobs completed successfully")
                 return True
             else:
-                print(f"❌ /ocr/async endpoint test failed: {success_count}/{total_files} files processed successfully")
+                print(f"❌ /ocr/async endpoint test failed: {success_count}/{len(submitted_jobs)} jobs completed successfully")
                 return False
                 
         except Exception as e:
