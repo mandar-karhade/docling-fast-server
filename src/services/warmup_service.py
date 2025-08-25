@@ -55,9 +55,13 @@ class WarmupService:
         # Worker identification
         self.worker_id = f"worker_{os.getpid()}"
         
-        # Check if warmup is already completed by another worker (only if using Redis)
+        # Check warmup status based on coordination mode
         if self.use_redis_coordination:
             self._check_redis_warmup_status()
+        else:
+            # Container-level warmup: assume warmup completed before workers started
+            self.warmup_status = "ready"
+            print(f"🎯 Worker {self.worker_id}: Container-level warmup assumed complete")
         
     def disable_redis_coordination(self):
         """Disable Redis coordination and use container-level warmup"""
