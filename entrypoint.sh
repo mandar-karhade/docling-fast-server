@@ -1,9 +1,9 @@
 #!/bin/bash
 
-# Entrypoint script for Docling CPU API
+# Entrypoint script for Docling CPU API with managed Redis and RQ workers
 set -e
 
-echo "🚀 Starting Docling CPU API..."
+echo "🚀 Starting Docling CPU API with managed Redis and RQ workers..."
 
 # Set default values if not provided
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-4}
@@ -34,5 +34,34 @@ echo "🔧 Starting services..."
 echo "   - API server (0.0.0.0:8000) with Upstash Redis support"
 echo ""
 
-# Start the API server and RQ worker
-exec /app/run.sh
+# Test Redis connection
+echo "🔍 Testing Redis connection..."
+if python3 -c "
+from upstash_redis import Redis
+import os
+try:
+    r = Redis(url=os.environ['UPSTASH_REDIS_REST_URL'], token=os.environ['UPSTASH_REDIS_REST_TOKEN'])
+    r.ping()
+    print('✅ Redis connection successful')
+except Exception as e:
+    print(f'❌ Redis connection failed: {e}')
+    exit(1)
+"; then
+    echo "✅ Redis connection verified"
+else
+    echo "❌ Redis connection failed"
+    echo "   Some features may not be available"
+fi
+
+echo "🚀 Starting API server..."
+echo "   Host: 0.0.0.0"
+echo "   Port: 8000"
+echo "   Workers: $UVICORN_WORKERS"
+echo ""
+
+# Start the API server
+exec uvicorn main:app \
+    --host 0.0.0.0 \
+    --port 8000 \
+    --workers $UVICORN_WORKERS \
+    --log-level info

@@ -39,7 +39,7 @@ RUN mkdir -p /app/warmup_files && chown -R appuser:appuser /app/warmup_files
 # Note: Models will be downloaded at runtime to /home/appuser/.EasyOCR for persistent storage
 
 # Make scripts executable
-RUN chmod +x /app/entrypoint.sh && chmod +x /app/run.sh
+RUN chmod +x /app/entrypoint.sh
 
 USER appuser
 

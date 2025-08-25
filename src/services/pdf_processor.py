@@ -36,7 +36,7 @@ class PDFProcessor:
                     "Content-Type": "application/json"
                 },
                 params={
-                    "model": os.getenv("OPENAI_MODEL", "gpt-4o"),
+                    "model": "gpt-5",
                     "max_completion_tokens": 300
                 },
                 timeout=60,

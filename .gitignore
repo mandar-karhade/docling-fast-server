@@ -49,8 +49,12 @@ Thumbs.db
 logs/
 
 # Test files and data
+tests/
 test_pdfs/
-*.pdf
+**pdf*
+
+# Models (EasyOCR cache - temporary files)
+models/
 
 # Local development
 # requirements-local.txt (keeping this in repo for development)
