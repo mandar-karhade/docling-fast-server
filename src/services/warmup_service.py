@@ -529,5 +529,5 @@ class WarmupService:
         return self.warmup_status == "ready"
 
 
-# Global warmup service instance
-warmup_service = WarmupService()
+# Global warmup service instance - use container-level warmup (no Redis coordination)
+warmup_service = WarmupService(use_redis_coordination=False)

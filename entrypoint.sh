@@ -69,9 +69,8 @@ try:
     
     print('🔥 Starting container warmup...')
     
-    # Create warmup service without Redis coordination
-    warmup = WarmupService()
-    warmup.disable_redis_coordination()
+    # Create warmup service in container-level mode (no Redis coordination)
+    warmup = WarmupService(use_redis_coordination=False)
     
     # Run warmup synchronously (blocking)
     warmup.run_warmup_sync()
