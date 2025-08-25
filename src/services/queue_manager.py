@@ -3,6 +3,9 @@ import psutil
 import asyncio
 import queue
 import threading
+import json
+import fcntl
+from pathlib import Path
 from datetime import datetime
 from typing import Dict, Optional
 from concurrent.futures import ThreadPoolExecutor
@@ -33,14 +36,49 @@ class QueueManager:
             thread_name_prefix="pdf_worker"
         )
         
-        # Job management (in-memory only, no file persistence needed)
+        # Job management (shared file storage for multi-worker compatibility)  
+        self.jobs_file = Path("/tmp/docling_jobs.json")
+        self._ensure_jobs_file()
         self.jobs: Dict[str, Dict] = {}
         
         # Track active workers
         self.active_workers = 0
         self.worker_lock = threading.Lock()
+        
+        # File lock for shared storage
+        self.file_lock = threading.Lock()
 
-
+    def _ensure_jobs_file(self):
+        """Ensure the jobs file exists"""
+        if not self.jobs_file.exists():
+            with open(self.jobs_file, 'w') as f:
+                json.dump({}, f)
+    
+    def _load_jobs_from_file(self) -> Dict[str, Dict]:
+        """Load jobs from shared file storage"""
+        try:
+            with open(self.jobs_file, 'r') as f:
+                fcntl.flock(f.fileno(), fcntl.LOCK_SH)  # Shared lock for reading
+                jobs_data = json.load(f)
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)  # Unlock
+                return jobs_data
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {}
+    
+    def _save_jobs_to_file(self, jobs_data: Dict[str, Dict]):
+        """Save jobs to shared file storage"""
+        try:
+            with open(self.jobs_file, 'w') as f:
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)  # Exclusive lock for writing
+                json.dump(jobs_data, f, indent=2)
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)  # Unlock
+        except Exception as e:
+            print(f"⚠️ Error saving jobs to file: {e}")
+    
+    def _sync_jobs(self):
+        """Sync in-memory jobs with file storage"""
+        with self.file_lock:
+            self.jobs = self._load_jobs_from_file()
 
     def get_worker_info(self) -> Dict:
         """Get current worker process information"""
@@ -146,7 +184,9 @@ class QueueManager:
             print(f"❌ Job {job_id} not found in jobs dictionary")
 
     def update_job_status(self, job_id: str, status: str, active: bool = False, waiting: bool = False, result=None, error=None):
-        """Update job status (simplified version for thread-based processing)"""
+        """Update job status (simplified version for thread-based processing with shared storage)"""
+        self._sync_jobs()  # Load latest from file first
+        
         if job_id in self.jobs:
             # Update job data
             self.jobs[job_id].update({
@@ -158,23 +198,30 @@ class QueueManager:
                 "updated_at": datetime.utcnow().isoformat()
             })
             
+            # Save to shared file
+            self._save_jobs_to_file(self.jobs)
+            
             print(f"🔧 Updated job {job_id}: status={status}, active={active}, waiting={waiting}")
         else:
             print(f"❌ Job {job_id} not found in jobs dictionary")
 
     def get_job(self, job_id: str) -> Optional[Dict]:
-        """Get job by ID"""
+        """Get job by ID (from shared storage)"""
+        self._sync_jobs()  # Load latest from file
         return self.jobs.get(job_id)
 
     def delete_job(self, job_id: str) -> bool:
-        """Delete a job"""
+        """Delete a job (from shared storage)"""
+        self._sync_jobs()  # Load latest from file first
         if job_id in self.jobs:
             del self.jobs[job_id]
+            self._save_jobs_to_file(self.jobs)  # Save after deletion
             return True
         return False
 
     def get_all_jobs(self) -> Dict[str, Dict]:
-        """Get all jobs"""
+        """Get all jobs (from shared storage)"""
+        self._sync_jobs()  # Load latest from file
         return self.jobs
 
     def get_queue_status(self) -> Dict:
@@ -278,8 +325,10 @@ class QueueManager:
             "filename": args[1] if len(args) > 1 else "Unknown"  # Store filename for easier access
         }
         
-        # Add to jobs dictionary
+        # Add to jobs dictionary and save to shared file
+        self._sync_jobs()  # Load latest from file first
         self.jobs[job_id] = job_data
+        self._save_jobs_to_file(self.jobs)
         
         # Submit job to worker pool (respects RQ_WORKERS limit)
         def process_job():
