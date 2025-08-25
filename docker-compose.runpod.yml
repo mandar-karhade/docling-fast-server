@@ -5,10 +5,6 @@ services:
       - env.local
     ports:
       - "8850:8000"  # Expose 8850 externally, map to 8000 internally
-    environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OMP_NUM_THREADS=${OMP_NUM_THREADS:-8}
-      - UVICORN_WORKERS=${UVICORN_WORKERS:-8}
     restart: unless-stopped
     command: /app/run.sh
     healthcheck:
