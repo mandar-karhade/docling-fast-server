@@ -1,0 +1,201 @@
+import os
+import json
+from pathlib import Path
+from typing import Dict, Any
+from dotenv import load_dotenv
+
+# Import docling components
+from docling.datamodel.base_models import InputFormat
+from docling.datamodel.pipeline_options import (
+    PdfPipelineOptions,
+    PictureDescriptionApiOptions,
+    EasyOcrOptions,
+)
+from docling.document_converter import DocumentConverter, PdfFormatOption
+from docling.datamodel.accelerator_options import AcceleratorDevice, AcceleratorOptions
+
+# Load environment
+load_dotenv()
+OMP_NUM_THREADS = os.getenv('OMP_NUM_THREADS', 4)
+
+print(f"OpenAI API Key available: {'Yes' if os.getenv('OPENAI_API_KEY') else 'No'}")
+
+
+class PDFProcessor:
+    def __init__(self):
+        self.picture_type = 'openai'  # You can make this configurable
+
+    def get_picture_description_options(self) -> PictureDescriptionApiOptions:
+        """Get picture description API options"""
+        if self.picture_type == 'openai':
+            # Configure picture description API (same as docling-serve)
+            picture_description_options = PictureDescriptionApiOptions(
+                url="https://api.openai.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}",
+                    "Content-Type": "application/json"
+                },
+                params={
+                    "model": os.getenv("OPENAI_MODEL", "gpt-4o"),
+                    "max_completion_tokens": 300
+                },
+                timeout=60,
+                prompt="Describe this image in detail, including any text, tables, charts, or diagrams you can see."
+            )
+            return picture_description_options
+        else:
+            raise ValueError(f"Invalid picture description type: {self.picture_type}")
+
+    def get_accelerator_options(self) -> AcceleratorOptions:
+        """Get accelerator options"""
+        # Use environment variable for thread count, default to 8
+        num_threads = int(os.getenv('OMP_NUM_THREADS', 8))
+        return AcceleratorOptions(
+            num_threads=num_threads,
+            device=AcceleratorDevice.AUTO,
+        )
+
+    def get_ocr_options(self) -> EasyOcrOptions:
+        """Get OCR options"""
+        return EasyOcrOptions(
+            lang=['en'],  # 'latin' is not supported, using only 'en'
+            #force_ocr=False,
+            use_gpu=False,
+            force_full_page_ocr=False,
+            confidence_threshold=0.5,
+            #model_storage_directory,
+            download_enabled=True,
+            # model_config = ConfigDict(
+            # extra="forbid",
+            # protected_namespaces=(),
+            # )
+        )
+
+    def get_pdf_pipeline_options(self) -> PdfPipelineOptions:
+        """Get PDF pipeline options."""
+        return PdfPipelineOptions(
+            # Accelerator options 
+            accelerator_options=self.get_accelerator_options(),
+            
+            # OCR options
+            do_ocr=True,
+            force_ocr=False,    
+            ocr_options=self.get_ocr_options(),
+
+            # OCR enhancements
+            table_mode="accurate",
+            include_images=True,
+            do_table_structure=True,
+            do_code_enrichment=True,
+            do_formula_enrichment=True,
+            do_picture_classification=True,
+
+            # external picture description API
+            do_picture_description=True,
+            enable_remote_services=True, 
+            picture_description_options=self.get_picture_description_options()
+        )
+
+    def process_pdf(self, pdf_path: Path, output_dir: Path) -> Dict[str, Any]:
+        """Process PDF using locally installed docling with the same options"""
+        print(f"📄 Processing {pdf_path.name} with local docling")
+        
+        # Create document converter with PDF format options
+        doc_converter = DocumentConverter(
+            format_options={
+                InputFormat.PDF: PdfFormatOption(
+                    pipeline_options=self.get_pdf_pipeline_options(),
+                )
+            }
+        )
+        
+        print("🚀 Starting document conversion...")
+        
+        # Convert the document
+        result = doc_converter.convert(pdf_path)
+        return result.document
+
+    def get_output(self, doc, pdf_stem: str, suffix: str) -> Dict[str, Any]:
+        """Create results object from docling document without saving files"""
+        try:
+            # Create results object with all export formats
+            results = {
+                'filename': pdf_stem,
+                'converted_doc': doc,
+                'markdown': doc.export_to_markdown(),
+                'json': doc.export_to_dict(),
+                'html': doc.export_to_html(),
+                'text': doc.export_to_text()
+            }
+            
+            print(f"📦 Created results object for {pdf_stem}_{suffix}")
+            return results
+
+        except Exception as e:
+            print(f"❌ Error creating results for {pdf_stem}_{suffix}: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
+
+    async def process_pdf_async(self, job_id: str, pdf_path: Path, temp_path: Path):
+        """Process PDF asynchronously and update job status"""
+        import asyncio
+        import shutil
+        from src.services.queue_manager import queue_manager
+        from src.models.job import JobUpdate
+        
+        # Set task name for tracking
+        current_task = asyncio.current_task()
+        if current_task:
+            current_task.set_name(f"process_pdf_{job_id}")
+        
+        try:
+            # Mark job as active and not waiting
+            update = JobUpdate(status="processing", active=True, waiting=False)
+            queue_manager.update_job(job_id, update, "Job started processing")
+            
+            # Get queue info before starting
+            queue_info = queue_manager.get_worker_queue_info()
+            queue_manager.update_job(job_id, JobUpdate(), f"Queue status: {queue_info}")
+            
+            # Process the PDF in a thread pool since process_pdf is blocking
+            queue_manager.update_job(job_id, JobUpdate(), "Starting document conversion in thread pool")
+            loop = asyncio.get_event_loop()
+            doc = await loop.run_in_executor(None, self.process_pdf, pdf_path, temp_path)
+            queue_manager.update_job(job_id, JobUpdate(), "Document conversion completed")
+            
+            # Generate results
+            queue_manager.update_job(job_id, JobUpdate(), "Generating output formats")
+            pdf_stem = pdf_path.stem
+            results = self.get_output(doc, pdf_stem, "ocr")
+            queue_manager.update_job(job_id, JobUpdate(), "Output generation completed")
+            
+            if results:
+                result_data = {
+                    "status": "success",
+                    "filename": pdf_path.name,
+                    "files": results
+                }
+                update = JobUpdate(status="completed", active=False, waiting=False, result=result_data)
+                queue_manager.update_job(job_id, update, "Job completed successfully")
+            else:
+                update = JobUpdate(status="failed", active=False, waiting=False, error="Failed to create output files")
+                queue_manager.update_job(job_id, update, "Failed to create output files")
+                
+        except Exception as e:
+            error_msg = f"Async processing error for job {job_id}: {e}"
+            print(f"❌ {error_msg}")
+            update = JobUpdate(status="failed", active=False, waiting=False, error=str(e))
+            queue_manager.update_job(job_id, update, error_msg)
+        finally:
+            # Clean up temporary directory
+            try:
+                shutil.rmtree(temp_path)
+                queue_manager.update_job(job_id, JobUpdate(), "Temporary directory cleaned up")
+            except Exception as e:
+                queue_manager.update_job(job_id, JobUpdate(), f"Error cleaning up temp directory: {e}")
+
+
+# Global PDF processor instance
+pdf_processor = PDFProcessor()
