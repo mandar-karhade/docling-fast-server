@@ -4,8 +4,11 @@ import asyncio
 import queue
 import threading
 import json
+import time
+import gzip
+import shutil
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Optional
 from concurrent.futures import ThreadPoolExecutor
 from upstash_redis import Redis
@@ -37,6 +40,14 @@ class QueueManager:
         
         # Job management (shared file storage for multi-worker compatibility)  
         self.jobs_file = Path("/tmp/docling_jobs.json")
+        self.jobs_archive_dir = Path("/tmp/docling_jobs_archive")
+        self.jobs_archive_dir.mkdir(exist_ok=True)
+        
+        # Job file rotation settings
+        self.max_file_size_mb = int(os.getenv('JOB_FILE_MAX_SIZE_MB', 10))  # 10MB default
+        self.max_jobs_per_file = int(os.getenv('MAX_JOBS_PER_FILE', 100))  # 100 jobs default
+        self.job_retention_hours = int(os.getenv('JOB_RETENTION_HOURS', 24))  # 24 hours default
+        
         self._ensure_jobs_file()
         self.jobs: Dict[str, Dict] = {}
         
@@ -69,22 +80,142 @@ class QueueManager:
             print(f"⚠️ Error loading jobs from file: {e}")
             return {}
     
+    def _filter_job_data_for_storage(self, job_data: Dict) -> Dict:
+        """Filter job data to remove large objects before storage"""
+        filtered_job = job_data.copy()
+        
+        # Remove large data from args (PDF bytes)
+        if 'args' in filtered_job and isinstance(filtered_job['args'], list):
+            filtered_args = []
+            for arg in filtered_job['args']:
+                if isinstance(arg, bytes):
+                    filtered_args.append(f"<bytes_data_size_{len(arg)}>")
+                elif isinstance(arg, str) and len(arg) > 1000:
+                    filtered_args.append(f"{arg[:100]}...<truncated_size_{len(arg)}>")
+                else:
+                    filtered_args.append(arg)
+            filtered_job['args'] = filtered_args
+        
+        # Limit result size
+        if 'result' in filtered_job and filtered_job['result']:
+            result = filtered_job['result']
+            if isinstance(result, dict):
+                # Keep only essential result fields and limit size
+                filtered_result = {}
+                for key, value in result.items():
+                    if key in ['status', 'filename', 'pages', 'total_characters', 'processing_time']:
+                        filtered_result[key] = value
+                    elif isinstance(value, str) and len(value) > 500:
+                        filtered_result[key] = f"{value[:100]}...<truncated_size_{len(value)}>"
+                    elif isinstance(value, list) and len(value) > 10:
+                        filtered_result[key] = f"<list_with_{len(value)}_items>"
+                    else:
+                        filtered_result[key] = value
+                filtered_job['result'] = filtered_result
+            elif isinstance(result, str) and len(result) > 1000:
+                filtered_job['result'] = f"{result[:200]}...<truncated_size_{len(result)}>"
+        
+        # Limit logs to last 10 entries
+        if 'logs' in filtered_job and isinstance(filtered_job['logs'], list):
+            filtered_job['logs'] = filtered_job['logs'][-10:]
+        
+        return filtered_job
+
+    def _check_file_rotation_needed(self) -> bool:
+        """Check if job file needs rotation based on size or job count"""
+        if not self.jobs_file.exists():
+            return False
+            
+        # Check file size
+        file_size_mb = self.jobs_file.stat().st_size / (1024 * 1024)
+        if file_size_mb > self.max_file_size_mb:
+            print(f"📁 Job file size ({file_size_mb:.1f}MB) exceeds limit ({self.max_file_size_mb}MB)")
+            return True
+        
+        # Check job count
+        if len(self.jobs) > self.max_jobs_per_file:
+            print(f"📁 Job count ({len(self.jobs)}) exceeds limit ({self.max_jobs_per_file})")
+            return True
+            
+        return False
+
+    def _rotate_jobs_file(self):
+        """Rotate the current jobs file to archive and start fresh"""
+        try:
+            if not self.jobs_file.exists():
+                return
+                
+            # Create archive filename with timestamp
+            timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+            archive_filename = f"jobs_{timestamp}.json.gz"
+            archive_path = self.jobs_archive_dir / archive_filename
+            
+            # Compress and move current file to archive
+            with open(self.jobs_file, 'rb') as f_in:
+                with gzip.open(archive_path, 'wb') as f_out:
+                    shutil.copyfileobj(f_in, f_out)
+            
+            print(f"📁 Rotated jobs file to {archive_path}")
+            
+            # Remove old file and create new empty one
+            self.jobs_file.unlink()
+            self._ensure_jobs_file()
+            
+            # Clean up old archives
+            self._cleanup_old_archives()
+            
+        except Exception as e:
+            print(f"⚠️ Error rotating jobs file: {e}")
+
+    def _cleanup_old_archives(self):
+        """Remove archive files older than retention period"""
+        try:
+            cutoff_time = datetime.utcnow() - timedelta(hours=self.job_retention_hours)
+            
+            for archive_file in self.jobs_archive_dir.glob("jobs_*.json.gz"):
+                if archive_file.stat().st_mtime < cutoff_time.timestamp():
+                    archive_file.unlink()
+                    print(f"🗑️ Deleted old archive: {archive_file.name}")
+                    
+        except Exception as e:
+            print(f"⚠️ Error cleaning up archives: {e}")
+
     def _save_jobs_to_file(self, jobs_data: Dict[str, Dict]):
-        """Save jobs to shared file storage using atomic write"""
+        """Save jobs to shared file storage using atomic write with rotation"""
         import tempfile
         import os
         
         try:
+            # Check if rotation is needed before saving
+            if self._check_file_rotation_needed():
+                self._rotate_jobs_file()
+                # Clear in-memory jobs after rotation (keep only recent ones)
+                recent_jobs = {}
+                cutoff_time = datetime.utcnow() - timedelta(hours=1)  # Keep last hour
+                for job_id, job_data in jobs_data.items():
+                    created_at = datetime.fromisoformat(job_data.get('created_at', ''))
+                    if created_at > cutoff_time:
+                        recent_jobs[job_id] = job_data
+                jobs_data = recent_jobs
+            
+            # Filter job data to remove large objects
+            filtered_jobs = {}
+            for job_id, job_data in jobs_data.items():
+                filtered_jobs[job_id] = self._filter_job_data_for_storage(job_data)
+            
             # Write to temporary file first (atomic operation)
             temp_file = self.jobs_file.with_suffix('.tmp')
             
             with open(temp_file, 'w') as f:
-                json.dump(jobs_data, f, indent=2, default=str)
+                json.dump(filtered_jobs, f, indent=2, default=str)
                 f.flush()  # Ensure data is written
                 os.fsync(f.fileno())  # Force write to disk
             
             # Atomic rename (this is atomic on most filesystems)
             os.rename(temp_file, self.jobs_file)
+            
+            # Update in-memory jobs with filtered data
+            self.jobs = filtered_jobs
             
         except Exception as e:
             print(f"⚠️ Error saving jobs to file: {e}")
@@ -243,6 +374,84 @@ class QueueManager:
         """Get all jobs (from shared storage)"""
         self._sync_jobs()  # Load latest from file
         return self.jobs
+
+    def get_storage_info(self) -> Dict:
+        """Get information about job storage and file sizes"""
+        try:
+            storage_info = {
+                "current_file": {
+                    "path": str(self.jobs_file),
+                    "exists": self.jobs_file.exists(),
+                    "size_mb": 0,
+                    "job_count": len(self.jobs)
+                },
+                "archive_dir": {
+                    "path": str(self.jobs_archive_dir),
+                    "exists": self.jobs_archive_dir.exists(),
+                    "archive_count": 0,
+                    "total_archive_size_mb": 0
+                },
+                "settings": {
+                    "max_file_size_mb": self.max_file_size_mb,
+                    "max_jobs_per_file": self.max_jobs_per_file,
+                    "retention_hours": self.job_retention_hours
+                }
+            }
+            
+            # Get current file size
+            if self.jobs_file.exists():
+                storage_info["current_file"]["size_mb"] = self.jobs_file.stat().st_size / (1024 * 1024)
+            
+            # Get archive information
+            if self.jobs_archive_dir.exists():
+                archive_files = list(self.jobs_archive_dir.glob("jobs_*.json.gz"))
+                storage_info["archive_dir"]["archive_count"] = len(archive_files)
+                total_size = sum(f.stat().st_size for f in archive_files)
+                storage_info["archive_dir"]["total_archive_size_mb"] = total_size / (1024 * 1024)
+            
+            return storage_info
+            
+        except Exception as e:
+            return {"error": str(e)}
+
+    def cleanup_jobs(self, hours_old: int = None) -> Dict:
+        """Manually cleanup old jobs and force rotation if needed"""
+        try:
+            hours_old = hours_old or self.job_retention_hours
+            
+            # Cleanup old archives
+            self._cleanup_old_archives()
+            
+            # Force rotation if file is too large
+            if self._check_file_rotation_needed():
+                self._rotate_jobs_file()
+                
+            # Remove old jobs from memory
+            if hours_old > 0:
+                cutoff_time = datetime.utcnow() - timedelta(hours=hours_old)
+                original_count = len(self.jobs)
+                
+                self.jobs = {
+                    job_id: job_data for job_id, job_data in self.jobs.items()
+                    if datetime.fromisoformat(job_data.get('created_at', '')) > cutoff_time
+                }
+                
+                removed_count = original_count - len(self.jobs)
+                
+                # Save cleaned jobs
+                self._save_jobs_to_file(self.jobs)
+                
+                return {
+                    "status": "success",
+                    "removed_jobs": removed_count,
+                    "remaining_jobs": len(self.jobs),
+                    "cutoff_hours": hours_old
+                }
+            
+            return {"status": "success", "message": "Cleanup completed"}
+            
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
 
     def get_queue_status(self) -> Dict:
         """Get queue status and statistics with proper worker pool info"""

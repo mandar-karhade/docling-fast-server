@@ -163,3 +163,39 @@ async def get_queue_status():
             "error": str(e),
             "message": "Failed to get queue status"
         }
+
+
+@router.get("/storage_info")
+async def get_storage_info():
+    """Get information about job file storage and rotation"""
+    try:
+        storage_info = queue_manager.get_storage_info()
+        return {
+            "status": "success",
+            "storage_info": storage_info,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "message": "Failed to get storage info"
+        }
+
+
+@router.post("/cleanup_jobs")
+async def cleanup_jobs(hours_old: int = None):
+    """Manually trigger job cleanup and file rotation"""
+    try:
+        result = queue_manager.cleanup_jobs(hours_old)
+        return {
+            "status": "success",
+            "cleanup_result": result,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "message": "Failed to cleanup jobs"
+        }
