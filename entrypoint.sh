@@ -5,11 +5,26 @@ set -e
 
 echo "🚀 Starting Docling CPU API with managed Redis and RQ workers..."
 
-# No configurable environment variables needed
+# Environment variables will be set by RunPod
 
-# Validate OpenAI API key
+# Validate required environment variables
 if [ -z "$OPENAI_API_KEY" ]; then
     echo "❌ Error: OPENAI_API_KEY environment variable is required"
+    exit 1
+fi
+
+if [ -z "$OMP_NUM_THREADS" ]; then
+    echo "❌ Error: OMP_NUM_THREADS environment variable is required"
+    exit 1
+fi
+
+if [ -z "$UVICORN_WORKERS" ]; then
+    echo "❌ Error: UVICORN_WORKERS environment variable is required"
+    exit 1
+fi
+
+if [ -z "$RQ_WORKERS" ]; then
+    echo "❌ Error: RQ_WORKERS environment variable is required"
     exit 1
 fi
 
@@ -20,6 +35,9 @@ if [ -z "$UPSTASH_REDIS_REST_URL" ] || [ -z "$UPSTASH_REDIS_REST_TOKEN" ]; then
 fi
 
 echo "📊 Configuration:"
+echo "   OMP_NUM_THREADS: $OMP_NUM_THREADS"
+echo "   UVICORN_WORKERS: $UVICORN_WORKERS"
+echo "   RQ_WORKERS: $RQ_WORKERS"
 echo "   OpenAI API Key: ${OPENAI_API_KEY:0:10}..."
 echo "   Redis REST URL: ${UPSTASH_REDIS_REST_URL:0:30}..."
 echo ""
@@ -83,15 +101,12 @@ echo ""
 echo "🚀 Starting API server with pre-warmed container..."
 echo "   Host: 0.0.0.0"
 echo "   Port: 8000"
-echo "   Workers: 4"
+echo "   Workers: $UVICORN_WORKERS"
 echo ""
 
 # Start the API server (warmup already completed)
-# Set OpenMP threads for optimal performance
-export OMP_NUM_THREADS=4
-
 exec uvicorn main:app \
     --host 0.0.0.0 \
     --port 8000 \
-    --workers 4 \
+    --workers $UVICORN_WORKERS \
     --log-level info

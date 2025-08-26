@@ -85,7 +85,7 @@
 ## Key Behaviors
 
 ### Multi-Worker Environment
-- **Workers**: Fixed at 4 Uvicorn workers for optimal performance
+- **Workers**: Configurable Uvicorn workers via `UVICORN_WORKERS` environment variable
 - **Job Visibility**: All workers can see and update any job
 - **No 404 Errors**: Jobs remain accessible after completion
 - **Shared State**: File-based synchronization prevents race conditions
@@ -104,15 +104,13 @@
 
 ## Environment Configuration
 
-### Required Variables
+### Required Variables (Set in RunPod Environment)
 ```bash
 OPENAI_API_KEY=xxx         # Optional: for AI features
-RQ_WORKERS=2               # Number of processing workers (set in RunPod env)
+OMP_NUM_THREADS=4          # OpenMP threads per worker
+UVICORN_WORKERS=4          # Number of API workers  
+RQ_WORKERS=12              # Number of processing workers (recommended for 32-core)
 ```
-
-### Fixed Configuration
-- **UVICORN_WORKERS**: Fixed at 4 API workers
-- **OMP_NUM_THREADS**: Fixed at 4 threads per worker
 
 ### Optional Redis (Queue Persistence)
 ```bash
@@ -123,6 +121,23 @@ UPSTASH_REDIS_REST_TOKEN=xxx  # Redis authentication
 ## Deployment Considerations
 
 ### RunPod.io Deployment
+
+#### Environment Variables Configuration
+Set these required variables in RunPod environment settings:
+```bash
+OPENAI_API_KEY=your_openai_key
+OMP_NUM_THREADS=4              # OpenMP threads
+UVICORN_WORKERS=4              # API workers 
+RQ_WORKERS=12                  # Processing workers (adjust for your instance)
+```
+
+#### Optional Redis Variables
+```bash
+UPSTASH_REDIS_REST_URL=your_redis_url
+UPSTASH_REDIS_REST_TOKEN=your_redis_token
+```
+
+#### Deployment Process
 1. **Container Warmup**: Wait for `/warmup_status` to show `"ready": true`
 2. **Health Checks**: Use `/health` for ongoing monitoring
 3. **Job Submission**: Only submit to `/ocr/async` after warmup complete
