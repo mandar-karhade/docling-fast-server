@@ -57,6 +57,10 @@ class QueueManager:
         
         # File lock for shared storage
         self.file_lock = threading.Lock()
+        
+        # Full results storage (separate from job tracking)
+        self.results_dir = Path("/tmp/docling_results")
+        self.results_dir.mkdir(exist_ok=True)
 
     def _ensure_jobs_file(self):
         """Ensure the jobs file exists"""
@@ -120,6 +124,65 @@ class QueueManager:
             filtered_job['logs'] = filtered_job['logs'][-10:]
         
         return filtered_job
+
+    def _create_result_summary(self, result) -> Dict:
+        """Create a lightweight summary of the result for job tracking"""
+        if not result or not isinstance(result, dict):
+            return result
+        
+        summary = {
+            "status": result.get("status"),
+            "filename": result.get("filename"),
+            "processing_time": result.get("processing_time"),
+            "pages": 0,
+            "total_characters": 0,
+            "files_generated": []
+        }
+        
+        # Count pages and characters from files
+        if "files" in result and isinstance(result["files"], dict):
+            summary["files_generated"] = list(result["files"].keys())
+            for file_type, content in result["files"].items():
+                if isinstance(content, str):
+                    summary["total_characters"] += len(content)
+                    if file_type in ["markdown", "json"]:
+                        # Count pages by estimating from content length
+                        summary["pages"] = max(summary["pages"], len(content) // 2000 + 1)
+        
+        # Add truncated samples for preview
+        if "files" in result and isinstance(result["files"], dict):
+            preview_files = {}
+            for file_type, content in result["files"].items():
+                if isinstance(content, str) and len(content) > 0:
+                    preview_files[file_type] = {
+                        "size_chars": len(content),
+                        "preview": content[:200] + "..." if len(content) > 200 else content
+                    }
+            summary["file_previews"] = preview_files
+        
+        return summary
+
+    def _store_full_result(self, job_id: str, result):
+        """Store the full result separately from job tracking"""
+        try:
+            result_file = self.results_dir / f"{job_id}.json"
+            with open(result_file, 'w') as f:
+                json.dump(result, f, indent=2, default=str)
+            print(f"💾 Stored full result for job {job_id}")
+        except Exception as e:
+            print(f"⚠️ Error storing full result for {job_id}: {e}")
+
+    def _get_full_result(self, job_id: str):
+        """Retrieve the full result for a job"""
+        try:
+            result_file = self.results_dir / f"{job_id}.json"
+            if result_file.exists():
+                with open(result_file, 'r') as f:
+                    return json.load(f)
+            return None
+        except Exception as e:
+            print(f"⚠️ Error loading full result for {job_id}: {e}")
+            return None
 
     def _check_file_rotation_needed(self) -> bool:
         """Check if job file needs rotation based on size or job count"""
@@ -339,15 +402,24 @@ class QueueManager:
         self._sync_jobs()  # Load latest from file first
         
         if job_id in self.jobs:
+            # Filter the result before storing to prevent massive file sizes
+            filtered_result = None
+            if result is not None:
+                filtered_result = self._create_result_summary(result)
+            
             # Update job data
             self.jobs[job_id].update({
                 "status": status,
                 "active": active,
                 "waiting": waiting,
-                "result": result,
+                "result": filtered_result,
                 "error": error,
                 "updated_at": datetime.utcnow().isoformat()
             })
+            
+            # Store the full result separately for retrieval (not in job file)
+            if result is not None and status == "completed":
+                self._store_full_result(job_id, result)
             
             # Save to shared file
             self._save_jobs_to_file(self.jobs)
@@ -357,9 +429,18 @@ class QueueManager:
             print(f"❌ Job {job_id} not found in jobs dictionary")
 
     def get_job(self, job_id: str) -> Optional[Dict]:
-        """Get job by ID (from shared storage)"""
+        """Get job by ID (from shared storage) with full result if available"""
         self._sync_jobs()  # Load latest from file
-        return self.jobs.get(job_id)
+        job_data = self.jobs.get(job_id)
+        
+        if job_data and job_data.get("status") == "completed":
+            # Try to get the full result and merge it back
+            full_result = self._get_full_result(job_id)
+            if full_result:
+                job_data = job_data.copy()
+                job_data["result"] = full_result
+        
+        return job_data
 
     def delete_job(self, job_id: str) -> bool:
         """Delete a job (from shared storage)"""
@@ -367,6 +448,16 @@ class QueueManager:
         if job_id in self.jobs:
             del self.jobs[job_id]
             self._save_jobs_to_file(self.jobs)  # Save after deletion
+            
+            # Also delete the full result file if it exists
+            try:
+                result_file = self.results_dir / f"{job_id}.json"
+                if result_file.exists():
+                    result_file.unlink()
+                    print(f"🗑️ Deleted full result file for job {job_id}")
+            except Exception as e:
+                print(f"⚠️ Error deleting result file for {job_id}: {e}")
+            
             return True
         return False
 
@@ -391,6 +482,12 @@ class QueueManager:
                     "archive_count": 0,
                     "total_archive_size_mb": 0
                 },
+                "results_dir": {
+                    "path": str(self.results_dir),
+                    "exists": self.results_dir.exists(),
+                    "result_files": 0,
+                    "total_results_size_mb": 0
+                },
                 "settings": {
                     "max_file_size_mb": self.max_file_size_mb,
                     "max_jobs_per_file": self.max_jobs_per_file,
@@ -408,6 +505,13 @@ class QueueManager:
                 storage_info["archive_dir"]["archive_count"] = len(archive_files)
                 total_size = sum(f.stat().st_size for f in archive_files)
                 storage_info["archive_dir"]["total_archive_size_mb"] = total_size / (1024 * 1024)
+            
+            # Get results directory information
+            if self.results_dir.exists():
+                result_files = list(self.results_dir.glob("*.json"))
+                storage_info["results_dir"]["result_files"] = len(result_files)
+                total_size = sum(f.stat().st_size for f in result_files)
+                storage_info["results_dir"]["total_results_size_mb"] = total_size / (1024 * 1024)
             
             return storage_info
             
@@ -431,10 +535,28 @@ class QueueManager:
                 cutoff_time = datetime.utcnow() - timedelta(hours=hours_old)
                 original_count = len(self.jobs)
                 
+                # Collect old job IDs before filtering
+                old_job_ids = [
+                    job_id for job_id, job_data in self.jobs.items()
+                    if datetime.fromisoformat(job_data.get('created_at', '')) <= cutoff_time
+                ]
+                
+                # Filter jobs
                 self.jobs = {
                     job_id: job_data for job_id, job_data in self.jobs.items()
                     if datetime.fromisoformat(job_data.get('created_at', '')) > cutoff_time
                 }
+                
+                # Clean up old result files
+                cleaned_results = 0
+                for job_id in old_job_ids:
+                    try:
+                        result_file = self.results_dir / f"{job_id}.json"
+                        if result_file.exists():
+                            result_file.unlink()
+                            cleaned_results += 1
+                    except Exception as e:
+                        print(f"⚠️ Error cleaning result file {job_id}: {e}")
                 
                 removed_count = original_count - len(self.jobs)
                 
@@ -444,6 +566,7 @@ class QueueManager:
                 return {
                     "status": "success",
                     "removed_jobs": removed_count,
+                    "cleaned_result_files": cleaned_results,
                     "remaining_jobs": len(self.jobs),
                     "cutoff_hours": hours_old
                 }
