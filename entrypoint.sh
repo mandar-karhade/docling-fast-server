@@ -5,9 +5,7 @@ set -e
 
 echo "🚀 Starting Docling CPU API with managed Redis and RQ workers..."
 
-# Set default values 
-export OMP_NUM_THREADS=4
-export UVICORN_WORKERS=4
+# No configurable environment variables needed
 
 # Validate OpenAI API key
 if [ -z "$OPENAI_API_KEY" ]; then
@@ -89,8 +87,11 @@ echo "   Workers: 4"
 echo ""
 
 # Start the API server (warmup already completed)
+# Set OpenMP threads for optimal performance
+export OMP_NUM_THREADS=4
+
 exec uvicorn main:app \
     --host 0.0.0.0 \
     --port 8000 \
-    --workers $UVICORN_WORKERS \
+    --workers 4 \
     --log-level info
