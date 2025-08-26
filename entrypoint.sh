@@ -36,8 +36,12 @@ fi
 
 echo "📊 Configuration:"
 echo "   OMP_NUM_THREADS: $OMP_NUM_THREADS"
+echo "   OPENBLAS_NUM_THREADS: $OPENBLAS_NUM_THREADS"
+echo "   MKL_NUM_THREADS: $MKL_NUM_THREADS"
 echo "   UVICORN_WORKERS: $UVICORN_WORKERS"
 echo "   RQ_WORKERS: $RQ_WORKERS"
+echo "   CPU_LIMIT: $CPU_LIMIT"
+echo "   MEMORY_LIMIT: $MEMORY_LIMIT"
 echo "   OpenAI API Key: ${OPENAI_API_KEY:0:10}..."
 echo "   Redis REST URL: ${UPSTASH_REDIS_REST_URL:0:30}..."
 echo ""
