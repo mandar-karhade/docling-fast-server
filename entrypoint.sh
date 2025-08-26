@@ -22,8 +22,6 @@ if [ -z "$UPSTASH_REDIS_REST_URL" ] || [ -z "$UPSTASH_REDIS_REST_TOKEN" ]; then
 fi
 
 echo "📊 Configuration:"
-echo "   OMP_NUM_THREADS: $OMP_NUM_THREADS"
-echo "   UVICORN_WORKERS: $UVICORN_WORKERS"
 echo "   OpenAI API Key: ${OPENAI_API_KEY:0:10}..."
 echo "   Redis REST URL: ${UPSTASH_REDIS_REST_URL:0:30}..."
 echo ""
@@ -87,7 +85,7 @@ echo ""
 echo "🚀 Starting API server with pre-warmed container..."
 echo "   Host: 0.0.0.0"
 echo "   Port: 8000"
-echo "   Workers: $UVICORN_WORKERS"
+echo "   Workers: 4"
 echo ""
 
 # Start the API server (warmup already completed)
