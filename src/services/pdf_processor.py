@@ -17,6 +17,9 @@ from docling_core.types.doc.base import (
 from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling.datamodel.accelerator_options import AcceleratorDevice, AcceleratorOptions
 
+# Chunking imports
+from docling.chunking import HybridChunker
+
 # Load environment
 load_dotenv()
 OMP_NUM_THREADS = os.getenv('OMP_NUM_THREADS', 4)
@@ -27,6 +30,43 @@ print(f"OpenAI API Key available: {'Yes' if os.getenv('OPENAI_API_KEY') else 'No
 class PDFProcessor:
     def __init__(self):
         self.picture_type = 'openai'  # You can make this configurable
+        # Initialize chunker (lazy loading)
+        self._chunker = None
+    
+    def _initialize_chunker(self):
+        """Initialize the hybrid chunker (lazy loading)"""
+        if self._chunker is None:
+            print("🔧 Initializing hybrid chunker...")
+            self._chunker = HybridChunker()
+            print("✅ Hybrid chunker initialized")
+        return self._chunker
+
+    def create_hybrid_chunks(self, doc, pdf_stem: str, suffix: str) -> Dict[str, Any]:
+        """Create hybrid chunks from document using HybridChunker"""
+        try:
+            print(f"🔧 Starting hybrid chunking for {pdf_stem}_{suffix}")
+            chunker = self._initialize_chunker()
+            chunks = list(chunker.chunk(dl_doc=doc))
+            
+            # Create chunks data structure
+            chunks_data = {
+                "content": doc.export_to_dict(),
+                "chunks": chunks
+            }
+            
+            print(f"✅ Created {len(chunks)} chunks for {pdf_stem}_{suffix}")
+            return chunks_data
+            
+        except Exception as chunk_error:
+            print(f"⚠️ Error during chunking for {pdf_stem}_{suffix}: {chunk_error}")
+            import traceback
+            traceback.print_exc()
+            # Return error structure
+            return {
+                "content": doc.export_to_dict(),
+                "chunks": [],
+                "error": str(chunk_error)
+            }
 
     def get_picture_description_options(self) -> PictureDescriptionApiOptions:
         """Get picture description API options"""
@@ -129,6 +169,7 @@ class PDFProcessor:
                 'json': doc.export_to_dict(),
                 'markdown': doc.export_to_markdown(image_mode=ImageRefMode.EMBEDDED),
                 'html': doc.export_to_html(image_mode=ImageRefMode.EMBEDDED),
+                'chunks': self.create_hybrid_chunks(doc, pdf_stem, suffix)
             }
             
             print(f"📦 Created results object for {pdf_stem}_{suffix}")

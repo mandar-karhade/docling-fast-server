@@ -8,3 +8,5 @@ deepsearch-toolkit==2.0.1
 psutil==6.1.0
 rq==1.15.1
 upstash-redis==1.4.0
+# Chunking dependencies
+transformers==4.46.3
