@@ -489,15 +489,35 @@ class QueueManager:
                 recent_jobs = {}
                 cutoff_time = datetime.utcnow() - timedelta(hours=1)  # Keep last hour
                 for job_id, job_data in jobs_data.items():
-                    created_at = datetime.fromisoformat(job_data.get('created_at', ''))
-                    if created_at > cutoff_time:
+                    try:
+                        created_at_str = job_data.get('created_at', '')
+                        if created_at_str:
+                            created_at = datetime.fromisoformat(created_at_str)
+                            if created_at > cutoff_time:
+                                recent_jobs[job_id] = job_data
+                            else:
+                                print(f"🗑️ Rotating out old job {job_id} (created: {created_at_str})")
+                        else:
+                            # Keep jobs without created_at to be safe
+                            recent_jobs[job_id] = job_data
+                    except Exception as e:
+                        print(f"⚠️  Error parsing created_at for job {job_id}: {e}")
+                        # Keep the job if we can't parse the date to be safe
                         recent_jobs[job_id] = job_data
+                
+                removed_count = len(jobs_data) - len(recent_jobs)
+                if removed_count > 0:
+                    print(f"📁 File rotation: kept {len(recent_jobs)} recent jobs, rotated {removed_count} old jobs")
+                
                 jobs_data = recent_jobs
             
             # Filter job data to remove large objects
             filtered_jobs = {}
             for job_id, job_data in jobs_data.items():
                 filtered_jobs[job_id] = self._filter_job_data_for_storage(job_data)
+            
+            # Ensure parent directory exists
+            self.jobs_file.parent.mkdir(parents=True, exist_ok=True)
             
             # Write to temporary file first (atomic operation)
             temp_file = self.jobs_file.with_suffix('.tmp')
@@ -508,10 +528,13 @@ class QueueManager:
                 os.fsync(f.fileno())  # Force write to disk
             
             # Atomic rename (this is atomic on most filesystems)
-            os.rename(temp_file, self.jobs_file)
-            
-            # Update in-memory jobs with filtered data
-            self.jobs = filtered_jobs
+            if temp_file.exists():
+                os.rename(temp_file, self.jobs_file)
+                # Update in-memory jobs with filtered data
+                self.jobs = filtered_jobs
+                print(f"💾 Saved {len(filtered_jobs)} jobs to file")
+            else:
+                raise FileNotFoundError(f"Temporary file {temp_file} was not created successfully")
             
         except Exception as e:
             print(f"⚠️ Error saving jobs to file: {e}")
