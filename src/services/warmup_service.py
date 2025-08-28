@@ -9,7 +9,7 @@ import uuid
 from pathlib import Path
 from typing import Dict, List
 from datetime import datetime
-from upstash_redis import Redis
+# No external Redis needed for warmup coordination
 
 from .pdf_processor import pdf_processor
 from ..utils.deployment_id import get_container_deployment_id
@@ -21,61 +21,23 @@ class WarmupService:
         self.warmup_status = "not_started"
         self.api_base_url = "http://localhost:8000"
         
-        # Determine if we should use Redis coordination
-        if use_redis_coordination is None:
-            # Auto-detect: use Redis if credentials are available
-            use_redis_coordination = bool(os.getenv('UPSTASH_REDIS_REST_URL') and os.getenv('UPSTASH_REDIS_REST_TOKEN'))
+        # No Redis coordination needed - using simple container-level warmup
+        self.use_redis_coordination = False
+        print("📝 Redis coordination disabled - using container-level warmup")
         
-        self.use_redis_coordination = use_redis_coordination
-        
-        if self.use_redis_coordination:
-            # Initialize Redis connection for worker coordination
-            self.redis_url = os.getenv('UPSTASH_REDIS_REST_URL')
-            self.redis_token = os.getenv('UPSTASH_REDIS_REST_TOKEN')
-            
-            if not self.redis_url or not self.redis_token:
-                print("⚠️  WARNING: Redis credentials not found, disabling Redis coordination")
-                self.redis_conn = None
-                self.use_redis_coordination = False
-            else:
-                try:
-                    self.redis_conn = Redis(url=self.redis_url, token=self.redis_token)
-                    print("✅ Redis connection established for warmup coordination")
-                except Exception as e:
-                    print(f"⚠️  WARNING: Could not connect to Redis: {e}, disabling Redis coordination")
-                    self.redis_conn = None
-                    self.use_redis_coordination = False
-            
-            # Get or create container-level deployment ID
-            self.deployment_id = get_container_deployment_id()
-            
-            # Redis keys for coordination with unique deployment ID
-            self.WARMUP_STATUS_KEY = f"docling:warmup:status:{self.deployment_id}"
-            self.WARMUP_LOCK_KEY = f"docling:warmup:lock:{self.deployment_id}"
-            self.WARMUP_WORKER_KEY = f"docling:warmup:worker_id:{self.deployment_id}"
-            self.QUEUE_PREFIX = f"docling:queue:{self.deployment_id}"
-            
-            # Initialize unique queue for this deployment
-            self._initialize_unique_queue()
-        else:
-            print("📝 Redis coordination disabled - using container-level warmup")
-            self.redis_conn = None
+        # Get container-level deployment ID for consistency
+        self.deployment_id = get_container_deployment_id()
         
         # Worker identification
         self.worker_id = f"worker_{os.getpid()}"
         
-        # Check warmup status based on coordination mode
-        if self.use_redis_coordination:
-            self._check_redis_warmup_status()
-        else:
-            # Container-level warmup: assume warmup completed before workers started
-            self.warmup_status = "ready"
-            print(f"🎯 Worker {self.worker_id}: Container-level warmup assumed complete")
+        # Container-level warmup: assume warmup completed before workers started
+        self.warmup_status = "ready"
+        print(f"🎯 Worker {self.worker_id}: Container-level warmup assumed complete")
         
     def _initialize_unique_queue(self):
-        """Initialize a unique Redis queue for this deployment and clean up old queues"""
-        if not self.use_redis_coordination or not self.redis_conn:
-            return
+        """No-op: Redis coordination disabled"""
+        return
         
         try:
             # Clean up old deployment queues (older than 1 hour)
@@ -100,9 +62,8 @@ class WarmupService:
             print(f"⚠️  Error initializing unique queue: {e}")
     
     def _cleanup_old_deployment_queues(self):
-        """Clean up old deployment queues and their associated keys"""
-        if not self.use_redis_coordination or not self.redis_conn:
-            return
+        """No-op: Redis coordination disabled"""
+        return
         
         try:
             # Get all deployment keys
@@ -165,10 +126,8 @@ class WarmupService:
         return sorted(pdf_files)  # Sort for consistent order
     
     def _check_redis_warmup_status(self):
-        """Check if warmup is already completed by another worker via Redis"""
-        if not self.redis_conn:
-            print("⚠️  No Redis connection, using local warmup status")
-            return
+        """No-op: Redis coordination disabled"""
+        return
         
         try:
             status = self.redis_conn.get(self.WARMUP_STATUS_KEY)
@@ -186,9 +145,8 @@ class WarmupService:
             print(f"⚠️  Could not check warmup status from Redis: {e}")
     
     def _set_redis_status(self, status: str):
-        """Save warmup status to Redis for worker coordination"""
-        if not self.use_redis_coordination or not self.redis_conn:
-            return
+        """No-op: Redis coordination disabled"""
+        return
         
         try:
             # Set status with 24 hour expiration
@@ -200,9 +158,8 @@ class WarmupService:
             print(f"⚠️  Could not save status to Redis: {e}")
     
     def _acquire_redis_lock(self) -> bool:
-        """Try to acquire Redis lock for warmup process"""
-        if not self.use_redis_coordination or not self.redis_conn:
-            return True  # Allow warmup to proceed if no Redis coordination
+        """No-op: Redis coordination disabled - always allow warmup"""
+        return True
         
         try:
             # Try to set a lock with 10 minute expiration
@@ -219,9 +176,8 @@ class WarmupService:
             return True  # Allow warmup if Redis fails
     
     def _release_redis_lock(self):
-        """Release Redis lock after warmup completion or failure"""
-        if not self.use_redis_coordination or not self.redis_conn:
-            return
+        """No-op: Redis coordination disabled"""
+        return
         
         try:
             # Only delete lock if it's held by this worker
