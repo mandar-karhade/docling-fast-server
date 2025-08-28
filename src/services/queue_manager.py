@@ -16,6 +16,7 @@ from upstash_redis import Redis
 
 from src.models.job import Job, JobUpdate
 from src.utils.deployment_id import get_container_deployment_id
+from src.services.job_db import JobDatabase
 
 
 class QueueManager:
@@ -44,25 +45,17 @@ class QueueManager:
             thread_name_prefix="pdf_worker"
         )
         
-        # Job management (shared file storage for multi-worker compatibility)  
-        self.jobs_file = Path("/tmp/docling_jobs.json")
-        self.jobs_archive_dir = Path("/tmp/docling_jobs_archive")
-        self.jobs_archive_dir.mkdir(exist_ok=True)
-        
-        # Job file rotation settings
-        self.max_file_size_mb = int(os.getenv('JOB_FILE_MAX_SIZE_MB', 10))  # 10MB default
-        self.max_jobs_per_file = int(os.getenv('MAX_JOBS_PER_FILE', 100))  # 100 jobs default
+        # Job management (SQLite database for multi-worker compatibility)  
+        self.job_db = JobDatabase("/tmp/docling_jobs.db")
         self.job_retention_hours = int(os.getenv('JOB_RETENTION_HOURS', 24))  # 24 hours default
         
-        self._ensure_jobs_file()
-        self.jobs: Dict[str, Dict] = {}
+        self.jobs: Dict[str, Dict] = {}  # Lightweight in-memory cache
         
         # Track active workers
         self.active_workers = 0
         self.worker_lock = threading.Lock()
         
-        # File lock for shared storage
-        self.file_lock = threading.Lock()
+        print("✅ Using SQLite database for job storage")
         
         # Full results storage (separate from job tracking)
         self.results_dir = Path("/tmp/docling_results")
@@ -76,6 +69,9 @@ class QueueManager:
         
         # Track rejected job IDs to avoid repeated processing
         self._rejected_jobs_cache = set()
+        
+        # Clean up old jobs from SQLite database
+        self.job_db.cleanup_old_jobs(self.deployment_id, self.job_retention_hours)
         
         print(f"✅ Queue Manager initialized with deployment ID: {self.deployment_id}")
         print(f"🔧 Using queue prefix: {self.queue_prefix}")
@@ -532,7 +528,6 @@ class QueueManager:
                 os.rename(temp_file, self.jobs_file)
                 # Update in-memory jobs with filtered data
                 self.jobs = filtered_jobs
-                print(f"💾 Saved {len(filtered_jobs)} jobs to file")
             else:
                 raise FileNotFoundError(f"Temporary file {temp_file} was not created successfully")
             
@@ -657,46 +652,46 @@ class QueueManager:
             print(f"❌ Job {job_id} not found in jobs dictionary")
 
     def update_job_status(self, job_id: str, status: str, active: bool = False, waiting: bool = False, result=None, error=None):
-        """Update job status (simplified version for thread-based processing with shared storage)"""
-        self._sync_jobs()  # Load latest from file first
+        """Update job status (SQLite-based with shared storage)"""
+        # Filter the result before storing to prevent massive database entries
+        filtered_result = None
+        if result is not None:
+            filtered_result = self._create_result_summary(result)
         
-        if job_id in self.jobs:
-            # Filter the result before storing to prevent massive file sizes
-            filtered_result = None
-            if result is not None:
-                filtered_result = self._create_result_summary(result)
+        # Prepare update data
+        updates = {
+            "status": status,
+            "active": active,
+            "waiting": waiting,
+            "result": filtered_result,
+            "error": error
+        }
+        
+        # Update in SQLite database
+        if self.job_db.update_job(job_id, updates):
+            # Update in-memory cache
+            if job_id in self.jobs:
+                self.jobs[job_id].update(updates)
+                self.jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
             
-            # Update job data
-            self.jobs[job_id].update({
-                "status": status,
-                "active": active,
-                "waiting": waiting,
-                "result": filtered_result,
-                "error": error,
-                "updated_at": datetime.utcnow().isoformat()
-            })
-            
-            # Store the full result separately for retrieval (not in job file)
+            # Store the full result separately for retrieval (not in database)
             if result is not None and status == "completed":
                 self._store_full_result(job_id, result)
             
-            # Save to shared file
-            self._save_jobs_to_file(self.jobs)
-            
             print(f"🔧 Updated job {job_id}: status={status}, active={active}, waiting={waiting}")
         else:
-            print(f"❌ Job {job_id} not found in jobs dictionary")
+            print(f"❌ Failed to update job {job_id} in database")
 
     def get_job(self, job_id: str) -> Optional[Dict]:
-        """Get job by ID (from shared storage) with full result if available"""
+        """Get job by ID (from SQLite database) with full result if available"""
         try:
             # First validate if job belongs to current deployment (no cleanup here since routes handle it)
             if not self.is_valid_job_id_for_deployment(job_id, cleanup_if_invalid=False):
                 print(f"🚫 Rejecting job request {job_id} - not from current deployment {self.deployment_id}")
                 return None
             
-            self._sync_jobs()  # Load latest from file
-            job_data = self.jobs.get(job_id)
+            # Get job from SQLite database
+            job_data = self.job_db.get_job(job_id)
             
             if job_data and job_data.get("status") == "completed":
                 # Try to get the full result and merge it back
@@ -721,10 +716,11 @@ class QueueManager:
             print(f"🚫 Rejecting delete request for job {job_id} - not from current deployment {self.deployment_id}")
             return False
         
-        self._sync_jobs()  # Load latest from file first
-        if job_id in self.jobs:
-            del self.jobs[job_id]
-            self._save_jobs_to_file(self.jobs)  # Save after deletion
+        # Delete from SQLite database
+        if self.job_db.delete_job(job_id):
+            # Remove from in-memory cache
+            if job_id in self.jobs:
+                del self.jobs[job_id]
             
             # Also delete the full result file if it exists
             try:
@@ -956,10 +952,13 @@ class QueueManager:
             "filename": args[1] if len(args) > 1 else "Unknown"  # Store filename for easier access
         }
         
-        # Add to jobs dictionary and save to shared file
-        self._sync_jobs()  # Load latest from file first
-        self.jobs[job_id] = job_data
-        self._save_jobs_to_file(self.jobs)
+        # Save job to SQLite database
+        if self.job_db.create_job(job_id, job_data):
+            # Update in-memory cache for fast access
+            self.jobs[job_id] = job_data
+        else:
+            print(f"❌ Failed to save job {job_id} to database")
+            raise Exception(f"Failed to create job {job_id}")
         
         # Submit job to worker pool (respects RQ_WORKERS limit)
         def process_job():
