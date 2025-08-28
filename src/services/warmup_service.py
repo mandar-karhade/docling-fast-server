@@ -12,6 +12,7 @@ from datetime import datetime
 from upstash_redis import Redis
 
 from .pdf_processor import pdf_processor
+from ..utils.deployment_id import get_container_deployment_id
 
 
 class WarmupService:
@@ -46,7 +47,7 @@ class WarmupService:
                     self.use_redis_coordination = False
             
             # Get or create container-level deployment ID
-            self.deployment_id = self._get_container_deployment_id()
+            self.deployment_id = get_container_deployment_id()
             
             # Redis keys for coordination with unique deployment ID
             self.WARMUP_STATUS_KEY = f"docling:warmup:status:{self.deployment_id}"
@@ -71,34 +72,6 @@ class WarmupService:
             self.warmup_status = "ready"
             print(f"🎯 Worker {self.worker_id}: Container-level warmup assumed complete")
         
-    def _get_container_deployment_id(self) -> str:
-        """Get or create a container-level deployment ID shared across all workers"""
-        deployment_file = Path("/tmp/docling_deployment_id")
-        
-        try:
-            # Check if deployment ID already exists
-            if deployment_file.exists():
-                with open(deployment_file, 'r') as f:
-                    deployment_id = f.read().strip()
-                    if deployment_id:
-                        print(f"📋 Using existing container deployment ID: {deployment_id}")
-                        return deployment_id
-            
-            # Generate new deployment ID for this container
-            deployment_id = str(uuid.uuid4())[:8]
-            
-            # Save it for other workers to use
-            with open(deployment_file, 'w') as f:
-                f.write(deployment_id)
-            
-            print(f"✨ Generated new container deployment ID: {deployment_id}")
-            return deployment_id
-            
-        except Exception as e:
-            print(f"⚠️  Error managing deployment ID file: {e}")
-            # Fallback to process-based ID
-            return f"fallback_{os.getpid()}"
-
     def _initialize_unique_queue(self):
         """Initialize a unique Redis queue for this deployment and clean up old queues"""
         if not self.use_redis_coordination or not self.redis_conn:

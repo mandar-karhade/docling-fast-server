@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 from upstash_redis import Redis
 
 from src.models.job import Job, JobUpdate
+from src.utils.deployment_id import get_container_deployment_id
 
 
 class QueueManager:
@@ -30,11 +31,8 @@ class QueueManager:
         self.redis_conn = Redis(url=self.redis_url, token=self.redis_token)
         
         # Get container-level deployment ID for queue isolation
-        self.deployment_id = self._get_container_deployment_id()
+        self.deployment_id = get_container_deployment_id()
         self.queue_prefix = f"docling:queue:{self.deployment_id}"
-        
-        # Clean up any old queue data on startup
-        self._cleanup_old_queues()
         
         # Worker pool configuration
         self.max_workers = int(os.getenv('RQ_WORKERS', 2))
@@ -70,34 +68,11 @@ class QueueManager:
         self.results_dir = Path("/tmp/docling_results")
         self.results_dir.mkdir(exist_ok=True)
         
+        # Clean up any old queue data on startup (after all attributes are initialized)
+        self._cleanup_old_queues()
+        
         print(f"✅ Queue Manager initialized with deployment ID: {self.deployment_id}")
         print(f"🔧 Using queue prefix: {self.queue_prefix}")
-
-    def _get_container_deployment_id(self) -> str:
-        """Get container-level deployment ID shared across all workers"""
-        deployment_file = Path("/tmp/docling_deployment_id")
-        
-        try:
-            # Check if deployment ID already exists
-            if deployment_file.exists():
-                with open(deployment_file, 'r') as f:
-                    deployment_id = f.read().strip()
-                    if deployment_id:
-                        return deployment_id
-            
-            # Generate new deployment ID for this container
-            deployment_id = str(uuid.uuid4())[:8]
-            
-            # Save it for other workers to use
-            with open(deployment_file, 'w') as f:
-                f.write(deployment_id)
-            
-            return deployment_id
-            
-        except Exception as e:
-            print(f"⚠️  Error managing deployment ID file: {e}")
-            # Fallback to process-based ID
-            return f"fallback_{os.getpid()}"
 
     def _cleanup_old_queues(self):
         """Clean up old queue data from previous deployments"""
