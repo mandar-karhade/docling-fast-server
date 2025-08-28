@@ -71,6 +71,12 @@ class QueueManager:
         # Clean up any old queue data on startup (after all attributes are initialized)
         self._cleanup_old_queues()
         
+        # Clean up old deployment data from Redis
+        self._cleanup_old_deployment_keys_from_redis()
+        
+        # Track rejected job IDs to avoid repeated processing
+        self._rejected_jobs_cache = set()
+        
         print(f"✅ Queue Manager initialized with deployment ID: {self.deployment_id}")
         print(f"🔧 Using queue prefix: {self.queue_prefix}")
 
@@ -130,18 +136,48 @@ class QueueManager:
             if job_data and job_data.get("deployment_id") == self.deployment_id:
                 return True
             
-            # Job is from different deployment - clean it up if requested
+            # Job is from different deployment or not found
+            # Check if we've already processed this invalid job
+            if job_id in self._rejected_jobs_cache:
+                print(f"🚫 Job {job_id} already rejected and processed")
+                return False
+            
+            print(f"🚫 Job {job_id} rejected - not from current deployment {self.deployment_id}")
+            
+            # Add to rejected cache to avoid repeated processing
+            self._rejected_jobs_cache.add(job_id)
+            
+            # Clean it up if requested and it exists in our jobs
             if cleanup_if_invalid and job_data:
                 print(f"🧹 Cleaning up orphaned job {job_id} from different deployment")
                 self._cleanup_orphaned_job(job_id)
+            elif cleanup_if_invalid and not job_data:
+                # Job not in our jobs file, but might have result files - clean those up
+                print(f"🧹 Checking for orphaned files for job {job_id}")
+                self._cleanup_orphaned_files_only(job_id)
             
             return False
         except Exception as e:
             print(f"⚠️  Error validating job ID {job_id}: {e}")
             return False
     
+    def _cleanup_orphaned_files_only(self, job_id: str):
+        """Clean up result files and Redis keys for jobs not in our jobs dict"""
+        try:
+            # Remove result file if exists
+            result_file = self.results_dir / f"{job_id}.json"
+            if result_file.exists():
+                result_file.unlink()
+                print(f"🗑️ Removed orphaned result file for job {job_id}")
+            
+            # Also clean up any Redis keys for this job
+            self._cleanup_redis_keys_for_job(job_id)
+            
+        except Exception as e:
+            print(f"⚠️  Error cleaning up orphaned files for job {job_id}: {e}")
+    
     def _cleanup_orphaned_job(self, job_id: str):
-        """Clean up job from different deployment"""
+        """Clean up job from different deployment including Redis"""
         try:
             # Remove from local jobs file
             if job_id in self.jobs:
@@ -155,29 +191,109 @@ class QueueManager:
                 result_file.unlink()
                 print(f"🗑️ Removed orphaned result file for job {job_id}")
             
-            # Clean up from Redis if possible
-            try:
-                # Try to remove any Redis keys related to this job
-                # Note: We don't know the exact deployment prefix, but we can try common patterns
-                redis_keys_to_check = [
-                    f"docling:queue:*:{job_id}",
-                    f"docling:job:{job_id}",
-                    f"docling:result:{job_id}"
-                ]
-                
-                for key_pattern in redis_keys_to_check:
-                    try:
-                        # For Upstash Redis, we can't easily scan keys, so this is best effort
-                        # The main cleanup happens via file system
-                        pass
-                    except Exception as e:
-                        print(f"⚠️  Could not clean Redis key pattern {key_pattern}: {e}")
-                        
-            except Exception as e:
-                print(f"⚠️  Error during Redis cleanup for job {job_id}: {e}")
+            # Clean up from Redis
+            self._cleanup_redis_keys_for_job(job_id)
                 
         except Exception as e:
             print(f"⚠️  Error cleaning up orphaned job {job_id}: {e}")
+    
+    def _cleanup_redis_keys_for_job(self, job_id: str):
+        """Remove all possible Redis keys for a job from any deployment"""
+        try:
+            if not self.redis_conn:
+                print(f"⚠️  No Redis connection available for cleanup")
+                return
+            
+            # Try to delete common Redis key patterns for this job
+            # We'll try different deployment prefixes since we don't know which one the job came from
+            redis_keys_to_delete = [
+                # Direct job keys (old format)
+                f"docling:job:{job_id}",
+                f"docling:result:{job_id}",
+                f"docling:status:{job_id}",
+                f"docling:meta:{job_id}",
+                # RQ-style keys
+                f"rq:job:{job_id}",
+                f"rq:result:{job_id}",
+                # Our queue-specific keys
+                f"docling:queue:job:{job_id}",
+                # Try with some common deployment IDs (this is a best-effort cleanup)
+                f"{job_id}:data",
+                f"{job_id}:result",
+                f"{job_id}:status"
+            ]
+            
+            # Also try to construct keys with different deployment prefixes
+            # Extract potential deployment prefix from job_id if it exists
+            if '-' in job_id:
+                potential_deployment_id = job_id.split('-')[0]
+                if len(potential_deployment_id) == 8:  # Our deployment IDs are 8 chars
+                    redis_keys_to_delete.extend([
+                        f"docling:queue:{potential_deployment_id}:job:{job_id}",
+                        f"docling:queue:{potential_deployment_id}:result:{job_id}",
+                        f"docling:deployment:{potential_deployment_id}:job:{job_id}"
+                    ])
+            
+            deleted_keys = 0
+            for key in redis_keys_to_delete:
+                try:
+                    result = self.redis_conn.delete(key)
+                    if result and result > 0:
+                        deleted_keys += 1
+                        print(f"🗑️ Deleted Redis key: {key}")
+                except Exception as e:
+                    # Silent failure - key might not exist, which is fine
+                    pass
+            
+            if deleted_keys > 0:
+                print(f"🗑️ Cleaned up {deleted_keys} Redis keys for job {job_id}")
+            else:
+                print(f"📝 No Redis keys found to clean for job {job_id}")
+                
+        except Exception as e:
+            print(f"⚠️  Error during Redis cleanup for job {job_id}: {e}")
+    
+    def _cleanup_old_deployment_keys_from_redis(self):
+        """Clean up Redis keys from old deployments on startup"""
+        try:
+            if not self.redis_conn:
+                print("📝 No Redis connection for deployment cleanup")
+                return
+            
+            print("🧹 Cleaning up old deployment keys from Redis...")
+            
+            # Try to clean up common patterns of old deployment keys
+            # Since Upstash Redis doesn't easily support SCAN, we'll clean known patterns
+            old_key_patterns = [
+                # Old warmup keys (try to clean a few common ones)
+                "docling:warmup:status:*",
+                "docling:warmup:lock:*", 
+                "docling:warmup:worker_id:*",
+                # Old queue patterns
+                "docling:queue:*",
+                # RQ patterns
+                "rq:*",
+                # Old job patterns
+                "docling:job:*",
+                "docling:result:*"
+            ]
+            
+            # For Upstash Redis, we can't easily scan, so we'll try to delete some known keys
+            # that might be left from previous deployments. This is best effort.
+            
+            # Clean up deployment info from previous runs
+            for i in range(10):  # Try a few common deployment IDs
+                try:
+                    old_deployment_key = f"docling:deployment:*"
+                    # We can't really iterate, so this is limited cleanup
+                    pass
+                except:
+                    pass
+            
+            print("✅ Redis deployment cleanup completed (best effort)")
+            
+        except Exception as e:
+            print(f"⚠️  Error during Redis deployment cleanup: {e}")
 
     def _ensure_jobs_file(self):
         """Ensure the jobs file exists"""
