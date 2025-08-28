@@ -906,8 +906,9 @@ class QueueManager:
         import threading
         import time
         
-        # Generate a job ID
-        job_id = str(uuid.uuid4())
+        # Generate a job ID with deployment prefix
+        base_job_id = str(uuid.uuid4())
+        job_id = f"{self.deployment_id}-{base_job_id}"
         
         # Filter out RQ-specific kwargs that shouldn't be passed to the task function
         rq_kwargs = {
@@ -919,6 +920,7 @@ class QueueManager:
         # Create job entry
         job_data = {
             "id": job_id,
+            "deployment_id": self.deployment_id,
             "status": "queued",
             "created_at": datetime.utcnow().isoformat(),
             "updated_at": datetime.utcnow().isoformat(),
