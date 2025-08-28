@@ -115,6 +115,69 @@ class QueueManager:
             "created_at": datetime.utcnow().isoformat(),
             "max_workers": self.max_workers
         }
+    
+    def is_valid_job_id_for_deployment(self, job_id: str, cleanup_if_invalid: bool = True) -> bool:
+        """Check if job ID belongs to current deployment and optionally clean up invalid ones"""
+        try:
+            # Check if job ID has deployment prefix
+            if job_id.startswith(f"{self.deployment_id}-"):
+                return True
+            
+            # For backwards compatibility, also check if job exists in current jobs
+            # (for jobs created before deployment ID prefixing)
+            self._sync_jobs()  # Load latest from file
+            job_data = self.jobs.get(job_id)
+            if job_data and job_data.get("deployment_id") == self.deployment_id:
+                return True
+            
+            # Job is from different deployment - clean it up if requested
+            if cleanup_if_invalid and job_data:
+                print(f"🧹 Cleaning up orphaned job {job_id} from different deployment")
+                self._cleanup_orphaned_job(job_id)
+            
+            return False
+        except Exception as e:
+            print(f"⚠️  Error validating job ID {job_id}: {e}")
+            return False
+    
+    def _cleanup_orphaned_job(self, job_id: str):
+        """Clean up job from different deployment"""
+        try:
+            # Remove from local jobs file
+            if job_id in self.jobs:
+                del self.jobs[job_id]
+                self._save_jobs_to_file(self.jobs)
+                print(f"🗑️ Removed orphaned job {job_id} from jobs file")
+            
+            # Remove result file if exists
+            result_file = self.results_dir / f"{job_id}.json"
+            if result_file.exists():
+                result_file.unlink()
+                print(f"🗑️ Removed orphaned result file for job {job_id}")
+            
+            # Clean up from Redis if possible
+            try:
+                # Try to remove any Redis keys related to this job
+                # Note: We don't know the exact deployment prefix, but we can try common patterns
+                redis_keys_to_check = [
+                    f"docling:queue:*:{job_id}",
+                    f"docling:job:{job_id}",
+                    f"docling:result:{job_id}"
+                ]
+                
+                for key_pattern in redis_keys_to_check:
+                    try:
+                        # For Upstash Redis, we can't easily scan keys, so this is best effort
+                        # The main cleanup happens via file system
+                        pass
+                    except Exception as e:
+                        print(f"⚠️  Could not clean Redis key pattern {key_pattern}: {e}")
+                        
+            except Exception as e:
+                print(f"⚠️  Error during Redis cleanup for job {job_id}: {e}")
+                
+        except Exception as e:
+            print(f"⚠️  Error cleaning up orphaned job {job_id}: {e}")
 
     def _ensure_jobs_file(self):
         """Ensure the jobs file exists"""
@@ -395,13 +458,16 @@ class QueueManager:
             return {"error": str(e)}
 
     def create_job(self) -> str:
-        """Create a new job and return job ID"""
+        """Create a new job and return job ID with deployment prefix"""
         import uuid
-        job_id = str(uuid.uuid4())
+        # Create job ID with deployment prefix for validation
+        base_job_id = str(uuid.uuid4())
+        job_id = f"{self.deployment_id}-{base_job_id}"
         worker_info = self.get_worker_info()
         
         self.jobs[job_id] = {
             "id": job_id,
+            "deployment_id": self.deployment_id,
             "status": "waiting",
             "created_at": datetime.utcnow().isoformat(),
             "updated_at": datetime.utcnow().isoformat(),
@@ -484,20 +550,38 @@ class QueueManager:
 
     def get_job(self, job_id: str) -> Optional[Dict]:
         """Get job by ID (from shared storage) with full result if available"""
-        self._sync_jobs()  # Load latest from file
-        job_data = self.jobs.get(job_id)
-        
-        if job_data and job_data.get("status") == "completed":
-            # Try to get the full result and merge it back
-            full_result = self._get_full_result(job_id)
-            if full_result:
-                job_data = job_data.copy()
-                job_data["result"] = full_result
-        
-        return job_data
+        try:
+            # First validate if job belongs to current deployment (no cleanup here since routes handle it)
+            if not self.is_valid_job_id_for_deployment(job_id, cleanup_if_invalid=False):
+                print(f"🚫 Rejecting job request {job_id} - not from current deployment {self.deployment_id}")
+                return None
+            
+            self._sync_jobs()  # Load latest from file
+            job_data = self.jobs.get(job_id)
+            
+            if job_data and job_data.get("status") == "completed":
+                # Try to get the full result and merge it back
+                try:
+                    full_result = self._get_full_result(job_id)
+                    if full_result:
+                        job_data = job_data.copy()
+                        job_data["result"] = full_result
+                except Exception as e:
+                    print(f"⚠️  Could not load full result for job {job_id}: {e}")
+                    # Continue with summary result from job data
+            
+            return job_data
+        except Exception as e:
+            print(f"⚠️  Error in get_job for {job_id}: {e}")
+            return None
 
     def delete_job(self, job_id: str) -> bool:
         """Delete a job (from shared storage)"""
+        # Validate deployment before processing (no cleanup here since routes handle it)
+        if not self.is_valid_job_id_for_deployment(job_id, cleanup_if_invalid=False):
+            print(f"🚫 Rejecting delete request for job {job_id} - not from current deployment {self.deployment_id}")
+            return False
+        
         self._sync_jobs()  # Load latest from file first
         if job_id in self.jobs:
             del self.jobs[job_id]

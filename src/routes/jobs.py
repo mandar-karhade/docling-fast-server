@@ -13,9 +13,18 @@ router = APIRouter()
 async def get_job_status(job_id: str):
     """Get job status and results from simulated queue system"""
     try:
+        # Check if job belongs to current deployment before processing (with cleanup)
+        if not queue_manager.is_valid_job_id_for_deployment(job_id, cleanup_if_invalid=True):
+            deployment_id = queue_manager.deployment_id
+            raise HTTPException(
+                status_code=410,  # Gone - indicates resource existed but is no longer available
+                detail=f"Job rejected and cleaned up: belongs to different deployment. Current deployment: {deployment_id}"
+            )
+        
         # Get job from simulated queue system
         job_data = queue_manager.get_job(job_id)
         if not job_data:
+            # Job should exist if it passed deployment validation
             raise HTTPException(status_code=404, detail="Job not found")
         
         # Map simulated job status to RQ-compatible status
@@ -48,7 +57,10 @@ async def get_job_status(job_id: str):
             "error": error,
             "filename": filename
         }
+    except HTTPException:
+        raise
     except Exception as e:
+        print(f"⚠️  Error getting job status for {job_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Error getting job status: {str(e)}")
 
 
@@ -78,6 +90,14 @@ async def list_jobs():
 @router.delete("/jobs/{job_id}")
 async def delete_job(job_id: str):
     """Delete a job"""
+    # Check if job belongs to current deployment before processing (with cleanup)
+    if not queue_manager.is_valid_job_id_for_deployment(job_id, cleanup_if_invalid=True):
+        deployment_id = queue_manager.deployment_id
+        raise HTTPException(
+            status_code=410,  # Gone
+            detail=f"Job rejected and cleaned up: belongs to different deployment. Current deployment: {deployment_id}"
+        )
+    
     if queue_manager.delete_job(job_id):
         return {"status": "deleted", "job_id": job_id}
     else:
@@ -278,6 +298,14 @@ async def force_close_job(job_id: str, reason: str = Query(default="Abandoned jo
     This sets the job status to 'failed' with an abandonment reason.
     """
     try:
+        # Check if job belongs to current deployment before processing (with cleanup)
+        if not queue_manager.is_valid_job_id_for_deployment(job_id, cleanup_if_invalid=True):
+            deployment_id = queue_manager.deployment_id
+            raise HTTPException(
+                status_code=410,  # Gone
+                detail=f"Job rejected and cleaned up: belongs to different deployment. Current deployment: {deployment_id}"
+            )
+        
         # Get the job first
         job_data = queue_manager.get_job(job_id)
         if not job_data:
