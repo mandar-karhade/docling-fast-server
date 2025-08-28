@@ -1,37 +1,21 @@
 #!/bin/bash
 
-# Entrypoint script for Docling CPU API with managed Redis and RQ workers
+# Entrypoint script for Docling CPU API with in-memory job storage
 set -e
 
-echo "🚀 Starting Docling CPU API with managed Redis and RQ workers..."
+echo "🚀 Starting Docling CPU API with in-memory job storage..."
 
-# Environment variables will be set by RunPod
+# Environment variables (some optional, some required)
 
-# Validate required environment variables
+# Set defaults for optional environment variables
+export UVICORN_WORKERS=${UVICORN_WORKERS:-4}
+export OMP_NUM_THREADS=${OMP_NUM_THREADS:-1}
+
+# OPENAI_API_KEY is optional but recommended for enhanced processing
 if [ -z "$OPENAI_API_KEY" ]; then
-    echo "❌ Error: OPENAI_API_KEY environment variable is required"
-    exit 1
-fi
-
-if [ -z "$OMP_NUM_THREADS" ]; then
-    echo "❌ Error: OMP_NUM_THREADS environment variable is required"
-    exit 1
-fi
-
-if [ -z "$UVICORN_WORKERS" ]; then
-    echo "❌ Error: UVICORN_WORKERS environment variable is required"
-    exit 1
-fi
-
-if [ -z "$RQ_WORKERS" ]; then
-    echo "❌ Error: RQ_WORKERS environment variable is required"
-    exit 1
-fi
-
-# Validate Redis REST API credentials (optional - only needed for persistence)
-if [ -z "$UPSTASH_REDIS_REST_URL" ] || [ -z "$UPSTASH_REDIS_REST_TOKEN" ]; then
-    echo "⚠️  Warning: UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN not set"
-    echo "   Job queue will use in-memory storage (jobs lost on restart)"
+    echo "ℹ️  Note: OPENAI_API_KEY not set - some features may be limited"
+else
+    echo "✅ OpenAI API Key configured"
 fi
 
 echo "📊 Configuration:"
@@ -39,34 +23,17 @@ echo "   OMP_NUM_THREADS: $OMP_NUM_THREADS"
 echo "   OPENBLAS_NUM_THREADS: $OPENBLAS_NUM_THREADS"
 echo "   MKL_NUM_THREADS: $MKL_NUM_THREADS"
 echo "   UVICORN_WORKERS: $UVICORN_WORKERS"
-echo "   RQ_WORKERS: $RQ_WORKERS"
-echo "   CPU_LIMIT: $CPU_LIMIT"
-echo "   MEMORY_LIMIT: $MEMORY_LIMIT"
-echo "   OpenAI API Key: ${OPENAI_API_KEY:0:10}..."
-echo "   Redis REST URL: ${UPSTASH_REDIS_REST_URL:0:30}..."
+echo "   CPU_LIMIT: ${CPU_LIMIT:-not set}"
+echo "   MEMORY_LIMIT: ${MEMORY_LIMIT:-not set}"
+if [ -n "$OPENAI_API_KEY" ]; then
+    echo "   OpenAI API Key: ${OPENAI_API_KEY:0:10}***"
+fi
 echo ""
 
 echo "✅ Models will be downloaded automatically by Docling"
 echo "🔧 Starting services..."
-echo "   - API server (0.0.0.0:8000) with Upstash Redis support"
+echo "   - API server (0.0.0.0:8000) with in-memory job storage"
 echo ""
-
-# Test Redis connection (optional for job persistence)
-echo "🔍 Testing Redis connection..."
-if python3 -c "
-from upstash_redis import Redis
-import os
-try:
-    r = Redis(url=os.environ.get('UPSTASH_REDIS_REST_URL', ''), token=os.environ.get('UPSTASH_REDIS_REST_TOKEN', ''))
-    r.ping()
-    print('✅ Redis connection successful')
-except Exception as e:
-    print('⚠️ Redis connection failed - using in-memory job storage')
-" 2>/dev/null; then
-    echo "✅ Redis connection verified"
-else
-    echo "⚠️ Redis connection failed - continuing with in-memory job storage"
-fi
 
 echo ""
 echo "🔥 Running container-level warmup process..."

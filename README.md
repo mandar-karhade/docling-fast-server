@@ -10,7 +10,13 @@ A high-performance FastAPI service for processing PDF documents using Docling wi
 # Pull the image
 docker pull legendofmk/docling-cpu-api:latest
 
-# Run the container
+# Run with minimal configuration (all defaults)
+docker run -d \
+  --name docling-api \
+  -p 8001:8000 \
+  legendofmk/docling-cpu-api:latest
+
+# Or run with OpenAI API key for enhanced processing
 docker run -d \
   --name docling-api \
   -p 8001:8000 \
@@ -98,26 +104,37 @@ docling-custom/
 
 ### Environment Variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `OPENAI_API_KEY` | Required | Your OpenAI API key |
-| `OMP_NUM_THREADS` | 4 | Number of threads per worker |
-| `UVICORN_WORKERS` | 2 | Number of Uvicorn worker processes |
-| `CPU_LIMIT` | 8 | CPU cores limit |
-| `MEMORY_LIMIT` | 4G | Memory limit |
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `OPENAI_API_KEY` | None | Optional | OpenAI API key (recommended for enhanced processing) |
+| `UVICORN_WORKERS` | 4 | Optional | Number of Uvicorn worker processes |
+| `OMP_NUM_THREADS` | 1 | Optional | Number of threads per worker |
+| `MAX_WORKERS` | 2 | Optional | Maximum concurrent PDF processing workers |
+| `CPU_LIMIT` | None | Optional | CPU cores limit (for container orchestration) |
+| `MEMORY_LIMIT` | None | Optional | Memory limit (for container orchestration) |
+
+**Note:** All environment variables are optional with sensible defaults. The API works out-of-the-box without any configuration!
 
 ### Resource Optimization
 
-**For 8-Core Development:**
+**For Development (8 cores):**
 ```bash
-OMP_NUM_THREADS=4
 UVICORN_WORKERS=2
+OMP_NUM_THREADS=2
+MAX_WORKERS=2
 ```
 
-**For 64-Core Production:**
+**For Production (64 cores):**
 ```bash
-OMP_NUM_THREADS=8
 UVICORN_WORKERS=8
+OMP_NUM_THREADS=4
+MAX_WORKERS=4
+```
+
+**Minimal Setup (no configuration needed):**
+```bash
+# Just run - all defaults are sensible!
+docker run -p 8000:8000 legendofmk/docling-cpu-api:latest
 ```
 
 ## 📚 Documentation

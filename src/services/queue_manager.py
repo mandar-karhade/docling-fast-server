@@ -28,10 +28,10 @@ class QueueManager:
         self.queue_prefix = f"docling:queue:{self.deployment_id}"
         
         # Worker pool configuration
-        self.max_workers = int(os.getenv('RQ_WORKERS', 2))
-        print(f"🔧 Queue Manager: Using {self.max_workers} workers (from RQ_WORKERS)")
+        self.max_workers = int(os.getenv('MAX_WORKERS', 2))
+        print(f"🔧 Queue Manager: Using {self.max_workers} workers (from MAX_WORKERS)")
         
-        # Create worker pool that respects RQ_WORKERS limit
+        # Create worker pool that respects MAX_WORKERS limit
         self.executor = ThreadPoolExecutor(
             max_workers=self.max_workers,
             thread_name_prefix="pdf_worker"
@@ -112,10 +112,9 @@ class QueueManager:
             if job_id.startswith(f"{self.deployment_id}-"):
                 return True
             
-            # For backwards compatibility, also check if job exists in current jobs
+            # For backwards compatibility, also check if job exists in memory store
             # (for jobs created before deployment ID prefixing)
-            self._sync_jobs()  # Load latest from file
-            job_data = self.jobs.get(job_id)
+            job_data = self.job_store.get_job(job_id)
             if job_data and job_data.get("deployment_id") == self.deployment_id:
                 return True
             
@@ -527,10 +526,7 @@ class QueueManager:
             except:
                 pass
     
-    def _sync_jobs(self):
-        """Sync in-memory jobs with file storage"""
-        with self.file_lock:
-            self.jobs = self._load_jobs_from_file()
+    # _sync_jobs method removed - using in-memory storage only
 
     def get_worker_info(self) -> Dict:
         """Get current worker process information"""
@@ -715,9 +711,8 @@ class QueueManager:
         return False
 
     def get_all_jobs(self) -> Dict[str, Dict]:
-        """Get all jobs (from shared storage)"""
-        self._sync_jobs()  # Load latest from file
-        return self.jobs
+        """Get all jobs (from memory store)"""
+        return self.job_store.get_all_jobs()
 
     def get_storage_info(self) -> Dict:
         """Get information about job storage and file sizes"""

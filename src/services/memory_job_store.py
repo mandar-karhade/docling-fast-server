@@ -52,7 +52,14 @@ class InMemoryJobStore:
             with self._lock:
                 job_data = self._jobs.get(job_id)
                 if job_data:
+                    print(f"🔍 Found job {job_id} in memory store")
                     return job_data.copy()  # Return copy to prevent external modification
+                else:
+                    print(f"❌ Job {job_id} not found in memory store (have {len(self._jobs)} jobs)")
+                    # Debug: Show what jobs we do have
+                    if len(self._jobs) > 0:
+                        job_ids = list(self._jobs.keys())[:3]  # Show first 3
+                        print(f"🔍 Available jobs: {job_ids}...")
                 return None
         except Exception as e:
             print(f"❌ Error getting job {job_id}: {e}")

@@ -273,8 +273,7 @@ class WarmupService:
             import os
             
             # Test Redis connection using Upstash Redis
-            redis_url = os.getenv('UPSTASH_REDIS_REST_URL')
-            redis_token = os.getenv('UPSTASH_REDIS_REST_TOKEN')
+            # Redis credentials no longer needed - using in-memory storage
             
             if not redis_url or not redis_token:
                 print("❌ Redis connection test failed: Missing UPSTASH_REDIS_REST_URL or UPSTASH_REDIS_REST_TOKEN")
