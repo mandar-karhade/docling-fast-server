@@ -7,8 +7,6 @@ docling==2.46.0
 deepsearch-toolkit==2.0.1
 psutil==6.1.0
 rq==1.15.1
-upstash-redis==1.4.0
-# Database
-sqlalchemy==2.0.23
+# No external dependencies needed for in-memory job storage
 # Chunking dependencies
 transformers==4.46.3

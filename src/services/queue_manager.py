@@ -12,24 +12,16 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, Optional
 from concurrent.futures import ThreadPoolExecutor
-from upstash_redis import Redis
 
 from src.models.job import Job, JobUpdate
 from src.utils.deployment_id import get_container_deployment_id
-from src.services.job_db import JobDatabase
+from src.services.memory_job_store import InMemoryJobStore
 
 
 class QueueManager:
     def __init__(self):
-        # Use Upstash Redis REST API
-        self.redis_url = os.getenv('UPSTASH_REDIS_REST_URL')
-        self.redis_token = os.getenv('UPSTASH_REDIS_REST_TOKEN')
-        
-        if not self.redis_url or not self.redis_token:
-            raise ValueError("UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN are required")
-        
-        # Create Upstash Redis client
-        self.redis_conn = Redis(url=self.redis_url, token=self.redis_token)
+        # No external Redis needed - using in-memory storage for ephemeral jobs
+        print("🎯 Using in-memory job storage - no external Redis required")
         
         # Get container-level deployment ID for queue isolation
         self.deployment_id = get_container_deployment_id()
@@ -45,33 +37,28 @@ class QueueManager:
             thread_name_prefix="pdf_worker"
         )
         
-        # Job management (SQLite database for multi-worker compatibility)  
-        self.job_db = JobDatabase("/tmp/docling_jobs.db")
+        # Job management (in-memory store for ephemeral jobs)  
+        self.job_store = InMemoryJobStore()
+        self.job_store.set_deployment_id(self.deployment_id)
         self.job_retention_hours = int(os.getenv('JOB_RETENTION_HOURS', 24))  # 24 hours default
         
-        self.jobs: Dict[str, Dict] = {}  # Lightweight in-memory cache
+        self.jobs: Dict[str, Dict] = {}  # Compatibility cache (could be removed later)
         
         # Track active workers
         self.active_workers = 0
         self.worker_lock = threading.Lock()
         
-        print("✅ Using SQLite database for job storage")
-        
         # Full results storage (separate from job tracking)
         self.results_dir = Path("/tmp/docling_results")
         self.results_dir.mkdir(exist_ok=True)
         
-        # Clean up any old queue data on startup (after all attributes are initialized)
-        self._cleanup_old_queues()
-        
-        # Clean up old deployment data from Redis
-        self._cleanup_old_deployment_keys_from_redis()
+        # No Redis cleanup needed - using in-memory storage
         
         # Track rejected job IDs to avoid repeated processing
         self._rejected_jobs_cache = set()
         
-        # Clean up old jobs from SQLite database
-        self.job_db.cleanup_old_jobs(self.deployment_id, self.job_retention_hours)
+        # Clean up old jobs from memory store
+        self.job_store.cleanup_old_jobs(self.deployment_id, self.job_retention_hours)
         
         print(f"✅ Queue Manager initialized with deployment ID: {self.deployment_id}")
         print(f"🔧 Using queue prefix: {self.queue_prefix}")
@@ -667,36 +654,36 @@ class QueueManager:
             "error": error
         }
         
-        # Update in SQLite database
-        if self.job_db.update_job(job_id, updates):
-            # Update in-memory cache
+        # Update in memory store
+        if self.job_store.update_job(job_id, updates):
+            # Update compatibility cache
             if job_id in self.jobs:
                 self.jobs[job_id].update(updates)
                 self.jobs[job_id]["updated_at"] = datetime.utcnow().isoformat()
             
-            # Store the full result separately for retrieval (not in database)
+            # Store the full result separately for retrieval
             if result is not None and status == "completed":
-                self._store_full_result(job_id, result)
+                self.job_store.store_full_result(job_id, result)
             
             print(f"🔧 Updated job {job_id}: status={status}, active={active}, waiting={waiting}")
         else:
-            print(f"❌ Failed to update job {job_id} in database")
+            print(f"❌ Failed to update job {job_id} in memory store")
 
     def get_job(self, job_id: str) -> Optional[Dict]:
-        """Get job by ID (from SQLite database) with full result if available"""
+        """Get job by ID (from memory store) with full result if available"""
         try:
             # First validate if job belongs to current deployment (no cleanup here since routes handle it)
             if not self.is_valid_job_id_for_deployment(job_id, cleanup_if_invalid=False):
                 print(f"🚫 Rejecting job request {job_id} - not from current deployment {self.deployment_id}")
                 return None
             
-            # Get job from SQLite database
-            job_data = self.job_db.get_job(job_id)
+            # Get job from memory store
+            job_data = self.job_store.get_job(job_id)
             
             if job_data and job_data.get("status") == "completed":
                 # Try to get the full result and merge it back
                 try:
-                    full_result = self._get_full_result(job_id)
+                    full_result = self.job_store.get_full_result(job_id)
                     if full_result:
                         job_data = job_data.copy()
                         job_data["result"] = full_result
@@ -716,20 +703,13 @@ class QueueManager:
             print(f"🚫 Rejecting delete request for job {job_id} - not from current deployment {self.deployment_id}")
             return False
         
-        # Delete from SQLite database
-        if self.job_db.delete_job(job_id):
-            # Remove from in-memory cache
+        # Delete from memory store
+        if self.job_store.delete_job(job_id):
+            # Remove from compatibility cache
             if job_id in self.jobs:
                 del self.jobs[job_id]
             
-            # Also delete the full result file if it exists
-            try:
-                result_file = self.results_dir / f"{job_id}.json"
-                if result_file.exists():
-                    result_file.unlink()
-                    print(f"🗑️ Deleted full result file for job {job_id}")
-            except Exception as e:
-                print(f"⚠️ Error deleting result file for {job_id}: {e}")
+            # Result file deletion is handled by memory store
             
             return True
         return False
@@ -952,12 +932,12 @@ class QueueManager:
             "filename": args[1] if len(args) > 1 else "Unknown"  # Store filename for easier access
         }
         
-        # Save job to SQLite database
-        if self.job_db.create_job(job_id, job_data):
-            # Update in-memory cache for fast access
+        # Save job to memory store
+        if self.job_store.create_job(job_id, job_data):
+            # Update compatibility cache
             self.jobs[job_id] = job_data
         else:
-            print(f"❌ Failed to save job {job_id} to database")
+            print(f"❌ Failed to save job {job_id} to memory store")
             raise Exception(f"Failed to create job {job_id}")
         
         # Submit job to worker pool (respects RQ_WORKERS limit)

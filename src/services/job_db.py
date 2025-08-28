@@ -1,5 +1,6 @@
 import sqlite3
 import json
+import time
 import threading
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -12,65 +13,118 @@ class JobDatabase:
     def __init__(self, db_path: str = "/tmp/docling_jobs.db"):
         self.db_path = Path(db_path)
         self.local = threading.local()
+        self._db_lock = threading.Lock()  # Global lock for database initialization
         self._init_database()
     
     def _get_connection(self):
         """Get thread-local database connection"""
         if not hasattr(self.local, 'connection'):
-            self.local.connection = sqlite3.connect(
-                self.db_path,
-                timeout=30.0,  # 30 second timeout
-                check_same_thread=False
-            )
-            self.local.connection.row_factory = sqlite3.Row
-            # Enable WAL mode for better concurrency
-            self.local.connection.execute('PRAGMA journal_mode=WAL')
-            self.local.connection.execute('PRAGMA synchronous=NORMAL')
-            self.local.connection.execute('PRAGMA cache_size=10000')
-            self.local.connection.execute('PRAGMA temp_store=memory')
+            # Use longer timeout and retry logic for concurrent access
+            retry_count = 0
+            max_retries = 5
+            
+            while retry_count < max_retries:
+                try:
+                    self.local.connection = sqlite3.connect(
+                        self.db_path,
+                        timeout=60.0,  # 60 second timeout
+                        check_same_thread=False
+                    )
+                    self.local.connection.row_factory = sqlite3.Row
+                    
+                    # Configure for concurrency (with retries for WAL mode)
+                    try:
+                        self.local.connection.execute('PRAGMA journal_mode=WAL')
+                        self.local.connection.execute('PRAGMA synchronous=NORMAL') 
+                        self.local.connection.execute('PRAGMA cache_size=10000')
+                        self.local.connection.execute('PRAGMA temp_store=memory')
+                        self.local.connection.execute('PRAGMA busy_timeout=30000')  # 30 sec busy timeout
+                        break  # Success, exit retry loop
+                    except sqlite3.OperationalError as e:
+                        if "database is locked" in str(e) and retry_count < max_retries - 1:
+                            retry_count += 1
+                            time.sleep(0.1 * (2 ** retry_count))  # Exponential backoff
+                            self.local.connection.close()
+                            continue
+                        else:
+                            raise
+                except sqlite3.OperationalError as e:
+                    if "database is locked" in str(e) and retry_count < max_retries - 1:
+                        retry_count += 1
+                        time.sleep(0.1 * (2 ** retry_count))  # Exponential backoff
+                        continue
+                    else:
+                        raise
         return self.local.connection
     
     @contextmanager
     def get_cursor(self):
-        """Context manager for database operations"""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        try:
-            yield cursor
-            conn.commit()
-        except Exception as e:
-            conn.rollback()
-            raise e
-        finally:
-            cursor.close()
+        """Context manager for database operations with retry logic"""
+        retry_count = 0
+        max_retries = 3
+        
+        while retry_count < max_retries:
+            try:
+                conn = self._get_connection()
+                cursor = conn.cursor()
+                try:
+                    yield cursor
+                    conn.commit()
+                    break  # Success, exit retry loop
+                except sqlite3.OperationalError as e:
+                    conn.rollback()
+                    if "database is locked" in str(e) and retry_count < max_retries - 1:
+                        retry_count += 1
+                        time.sleep(0.1 * (2 ** retry_count))  # Exponential backoff
+                        continue
+                    else:
+                        raise e
+                except Exception as e:
+                    conn.rollback()
+                    raise e
+                finally:
+                    cursor.close()
+            except sqlite3.OperationalError as e:
+                if "database is locked" in str(e) and retry_count < max_retries - 1:
+                    retry_count += 1
+                    time.sleep(0.1 * (2 ** retry_count))  # Exponential backoff
+                    continue
+                else:
+                    raise
     
     def _init_database(self):
-        """Initialize database schema"""
-        with self.get_cursor() as cursor:
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS jobs (
-                    id TEXT PRIMARY KEY,
-                    deployment_id TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    filename TEXT,
-                    args_json TEXT,
-                    kwargs_json TEXT,
-                    result_json TEXT,
-                    logs_json TEXT,
-                    active INTEGER DEFAULT 0,
-                    waiting INTEGER DEFAULT 1,
-                    error TEXT
-                )
-            ''')
-            
-            # Create indexes for performance
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_deployment_id ON jobs(deployment_id)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_status ON jobs(status)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_created_at ON jobs(created_at)')
-            
-            print("✅ SQLite job database initialized")
+        """Initialize database schema with proper locking"""
+        with self._db_lock:  # Global lock to prevent concurrent schema creation
+            try:
+                with self.get_cursor() as cursor:
+                    cursor.execute('''
+                        CREATE TABLE IF NOT EXISTS jobs (
+                            id TEXT PRIMARY KEY,
+                            deployment_id TEXT NOT NULL,
+                            status TEXT NOT NULL,
+                            created_at TEXT NOT NULL,
+                            updated_at TEXT NOT NULL,
+                            filename TEXT,
+                            args_json TEXT,
+                            kwargs_json TEXT,
+                            result_json TEXT,
+                            logs_json TEXT,
+                            active INTEGER DEFAULT 0,
+                            waiting INTEGER DEFAULT 1,
+                            error TEXT
+                        )
+                    ''')
+                    
+                    # Create indexes for performance
+                    cursor.execute('CREATE INDEX IF NOT EXISTS idx_deployment_id ON jobs(deployment_id)')
+                    cursor.execute('CREATE INDEX IF NOT EXISTS idx_status ON jobs(status)')
+                    cursor.execute('CREATE INDEX IF NOT EXISTS idx_created_at ON jobs(created_at)')
+                    
+                    print("✅ SQLite job database initialized")
+            except Exception as e:
+                print(f"⚠️ Database initialization failed: {e}")
+                # Don't raise here - let it retry on first actual operation
+                pass
     
     def create_job(self, job_id: str, job_data: Dict) -> bool:
         """Create a new job entry"""
