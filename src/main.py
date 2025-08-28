@@ -16,7 +16,7 @@ from src.services.warmup_service import warmup_service
 app = FastAPI(
     title="Docling API",
     description="API for processing PDFs using Docling with comprehensive multi-language OCR support and hybrid chunking",
-    version="2.1.3"
+    version="2.2.0"
 )
 
 # Add compression middleware

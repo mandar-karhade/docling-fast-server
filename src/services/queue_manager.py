@@ -15,13 +15,13 @@ from concurrent.futures import ThreadPoolExecutor
 
 from src.models.job import Job, JobUpdate
 from src.utils.deployment_id import get_container_deployment_id
-from src.services.memory_job_store import InMemoryJobStore
+from src.services.redis_job_store import RedisJobStore
 
 
 class QueueManager:
     def __init__(self):
-        # No external Redis needed - using in-memory storage for ephemeral jobs
-        print("🎯 Using in-memory job storage - no external Redis required")
+        # Using local Redis for multi-worker job coordination
+        print("🎯 Using local Redis for multi-worker job coordination")
         
         # Get container-level deployment ID for queue isolation
         self.deployment_id = get_container_deployment_id()
@@ -37,8 +37,8 @@ class QueueManager:
             thread_name_prefix="pdf_worker"
         )
         
-        # Job management (in-memory store for ephemeral jobs)  
-        self.job_store = InMemoryJobStore()
+        # Job management (local Redis for multi-worker coordination)  
+        self.job_store = RedisJobStore()
         self.job_store.set_deployment_id(self.deployment_id)
         self.job_retention_hours = int(os.getenv('JOB_RETENTION_HOURS', 24))  # 24 hours default
         

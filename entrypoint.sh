@@ -32,8 +32,22 @@ echo ""
 
 echo "✅ Models will be downloaded automatically by Docling"
 echo "🔧 Starting services..."
-echo "   - API server (0.0.0.0:8000) with in-memory job storage"
+echo "   - Local Redis server for multi-worker coordination"
+echo "   - API server (0.0.0.0:8000) with Redis job storage"
 echo ""
+
+# Start local Redis server in background
+echo "🚀 Starting local Redis server..."
+redis-server --daemonize yes --port 6379 --bind 127.0.0.1 --save "" --appendonly no
+sleep 2
+
+# Test Redis connection
+if redis-cli ping > /dev/null 2>&1; then
+    echo "✅ Local Redis server started successfully"
+else
+    echo "❌ Failed to start local Redis server"
+    exit 1
+fi
 
 echo ""
 echo "🔥 Running container-level warmup process..."

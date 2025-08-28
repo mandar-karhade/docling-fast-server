@@ -7,6 +7,7 @@ docling==2.46.0
 deepsearch-toolkit==2.0.1
 psutil==6.1.0
 rq==1.15.1
-# No external dependencies needed for in-memory job storage
+# Local Redis for multi-worker job coordination
+redis==5.0.1
 # Chunking dependencies
 transformers==4.46.3
