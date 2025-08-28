@@ -79,8 +79,9 @@ class PDFProcessor:
                     "Content-Type": "application/json"
                 },
                 params={
-                    "model": "gpt-5",
-                    "max_completion_tokens": 300
+                    "model": "gpt-4o-mini",
+                    "max_completion_tokens": 300,
+                    "temperature": 0.0
                 },
                 timeout=60,
                 prompt="Describe this image in detail, including any text, tables, charts, or diagrams you can see."
@@ -136,7 +137,8 @@ class PDFProcessor:
             # external picture description API
             do_picture_description=True,
             enable_remote_services=True, 
-            picture_description_options=self.get_picture_description_options()
+            picture_description_options=self.get_picture_description_options(),
+            generate_picture_images = True,
         )
 
     def process_pdf(self, pdf_path: Path) -> Dict[str, Any]:
