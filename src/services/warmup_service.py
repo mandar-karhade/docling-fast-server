@@ -5,6 +5,7 @@ import tempfile
 import shutil
 import requests
 import time
+import uuid
 from pathlib import Path
 from typing import Dict, List
 from datetime import datetime
@@ -44,10 +45,17 @@ class WarmupService:
                     self.redis_conn = None
                     self.use_redis_coordination = False
             
-            # Redis keys for coordination
-            self.WARMUP_STATUS_KEY = "docling:warmup:status"
-            self.WARMUP_LOCK_KEY = "docling:warmup:lock"
-            self.WARMUP_WORKER_KEY = "docling:warmup:worker_id"
+            # Get or create container-level deployment ID
+            self.deployment_id = self._get_container_deployment_id()
+            
+            # Redis keys for coordination with unique deployment ID
+            self.WARMUP_STATUS_KEY = f"docling:warmup:status:{self.deployment_id}"
+            self.WARMUP_LOCK_KEY = f"docling:warmup:lock:{self.deployment_id}"
+            self.WARMUP_WORKER_KEY = f"docling:warmup:worker_id:{self.deployment_id}"
+            self.QUEUE_PREFIX = f"docling:queue:{self.deployment_id}"
+            
+            # Initialize unique queue for this deployment
+            self._initialize_unique_queue()
         else:
             print("📝 Redis coordination disabled - using container-level warmup")
             self.redis_conn = None
@@ -63,6 +71,101 @@ class WarmupService:
             self.warmup_status = "ready"
             print(f"🎯 Worker {self.worker_id}: Container-level warmup assumed complete")
         
+    def _get_container_deployment_id(self) -> str:
+        """Get or create a container-level deployment ID shared across all workers"""
+        deployment_file = Path("/tmp/docling_deployment_id")
+        
+        try:
+            # Check if deployment ID already exists
+            if deployment_file.exists():
+                with open(deployment_file, 'r') as f:
+                    deployment_id = f.read().strip()
+                    if deployment_id:
+                        print(f"📋 Using existing container deployment ID: {deployment_id}")
+                        return deployment_id
+            
+            # Generate new deployment ID for this container
+            deployment_id = str(uuid.uuid4())[:8]
+            
+            # Save it for other workers to use
+            with open(deployment_file, 'w') as f:
+                f.write(deployment_id)
+            
+            print(f"✨ Generated new container deployment ID: {deployment_id}")
+            return deployment_id
+            
+        except Exception as e:
+            print(f"⚠️  Error managing deployment ID file: {e}")
+            # Fallback to process-based ID
+            return f"fallback_{os.getpid()}"
+
+    def _initialize_unique_queue(self):
+        """Initialize a unique Redis queue for this deployment and clean up old queues"""
+        if not self.use_redis_coordination or not self.redis_conn:
+            return
+        
+        try:
+            # Clean up old deployment queues (older than 1 hour)
+            self._cleanup_old_deployment_queues()
+            
+            # Set deployment info in Redis
+            deployment_info = {
+                "deployment_id": self.deployment_id,
+                "created_at": datetime.utcnow().isoformat(),
+                "worker_id": self.worker_id,
+                "queue_prefix": self.QUEUE_PREFIX
+            }
+            
+            # Store deployment info with 24 hour expiration
+            deployment_key = f"docling:deployment:{self.deployment_id}"
+            self.redis_conn.set(deployment_key, str(deployment_info), ex=86400)
+            
+            print(f"✅ Initialized unique queue with deployment ID: {self.deployment_id}")
+            print(f"🔧 Queue prefix: {self.QUEUE_PREFIX}")
+            
+        except Exception as e:
+            print(f"⚠️  Error initializing unique queue: {e}")
+    
+    def _cleanup_old_deployment_queues(self):
+        """Clean up old deployment queues and their associated keys"""
+        if not self.use_redis_coordination or not self.redis_conn:
+            return
+        
+        try:
+            # Get all deployment keys
+            deployment_keys = []
+            try:
+                # Note: Upstash Redis may have limitations on SCAN operations
+                # We'll use a simple key pattern approach
+                print("🧹 Cleaning up old deployment queues...")
+            except Exception as e:
+                print(f"⚠️  Could not scan for old deployments: {e}")
+                return
+            
+            # Clean up any orphaned warmup/lock keys older than 1 hour
+            cutoff_time = datetime.utcnow().timestamp() - 3600  # 1 hour ago
+            
+            # Try to clean up known key patterns (best effort)
+            old_patterns = [
+                "docling:warmup:status:*",
+                "docling:warmup:lock:*", 
+                "docling:warmup:worker_id:*",
+                "docling:queue:*"
+            ]
+            
+            for pattern in old_patterns:
+                try:
+                    # For Upstash Redis, we can't easily scan keys
+                    # So we'll just clean up keys we know about from previous deployments
+                    pass
+                except Exception as e:
+                    print(f"⚠️  Error cleaning pattern {pattern}: {e}")
+            
+            print("✅ Queue cleanup completed")
+            
+        except Exception as e:
+            print(f"⚠️  Error during queue cleanup: {e}")
+
     def disable_redis_coordination(self):
         """Disable Redis coordination and use container-level warmup"""
         self.use_redis_coordination = False

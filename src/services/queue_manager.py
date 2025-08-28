@@ -7,6 +7,7 @@ import json
 import time
 import gzip
 import shutil
+import uuid
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, Optional
@@ -27,6 +28,13 @@ class QueueManager:
         
         # Create Upstash Redis client
         self.redis_conn = Redis(url=self.redis_url, token=self.redis_token)
+        
+        # Get container-level deployment ID for queue isolation
+        self.deployment_id = self._get_container_deployment_id()
+        self.queue_prefix = f"docling:queue:{self.deployment_id}"
+        
+        # Clean up any old queue data on startup
+        self._cleanup_old_queues()
         
         # Worker pool configuration
         self.max_workers = int(os.getenv('RQ_WORKERS', 2))
@@ -61,6 +69,77 @@ class QueueManager:
         # Full results storage (separate from job tracking)
         self.results_dir = Path("/tmp/docling_results")
         self.results_dir.mkdir(exist_ok=True)
+        
+        print(f"✅ Queue Manager initialized with deployment ID: {self.deployment_id}")
+        print(f"🔧 Using queue prefix: {self.queue_prefix}")
+
+    def _get_container_deployment_id(self) -> str:
+        """Get container-level deployment ID shared across all workers"""
+        deployment_file = Path("/tmp/docling_deployment_id")
+        
+        try:
+            # Check if deployment ID already exists
+            if deployment_file.exists():
+                with open(deployment_file, 'r') as f:
+                    deployment_id = f.read().strip()
+                    if deployment_id:
+                        return deployment_id
+            
+            # Generate new deployment ID for this container
+            deployment_id = str(uuid.uuid4())[:8]
+            
+            # Save it for other workers to use
+            with open(deployment_file, 'w') as f:
+                f.write(deployment_id)
+            
+            return deployment_id
+            
+        except Exception as e:
+            print(f"⚠️  Error managing deployment ID file: {e}")
+            # Fallback to process-based ID
+            return f"fallback_{os.getpid()}"
+
+    def _cleanup_old_queues(self):
+        """Clean up old queue data from previous deployments"""
+        try:
+            print("🧹 Cleaning up old queue data...")
+            
+            # Clear any existing jobs file to start fresh
+            if self.jobs_file.exists():
+                print(f"🗑️ Clearing old jobs file: {self.jobs_file}")
+                self.jobs_file.unlink()
+                self._ensure_jobs_file()
+            
+            # Clean up old result files older than 1 hour
+            if self.results_dir.exists():
+                cutoff_time = datetime.utcnow() - timedelta(hours=1)
+                cleaned_count = 0
+                
+                for result_file in self.results_dir.glob("*.json"):
+                    try:
+                        file_mtime = datetime.fromtimestamp(result_file.stat().st_mtime)
+                        if file_mtime < cutoff_time:
+                            result_file.unlink()
+                            cleaned_count += 1
+                    except Exception as e:
+                        print(f"⚠️  Error cleaning result file {result_file}: {e}")
+                
+                if cleaned_count > 0:
+                    print(f"🗑️ Cleaned up {cleaned_count} old result files")
+            
+            print("✅ Queue cleanup completed")
+            
+        except Exception as e:
+            print(f"⚠️  Error during queue cleanup: {e}")
+
+    def get_deployment_info(self) -> Dict:
+        """Get deployment information"""
+        return {
+            "deployment_id": self.deployment_id,
+            "queue_prefix": self.queue_prefix,
+            "created_at": datetime.utcnow().isoformat(),
+            "max_workers": self.max_workers
+        }
 
     def _ensure_jobs_file(self):
         """Ensure the jobs file exists"""

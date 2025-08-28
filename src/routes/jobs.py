@@ -1,5 +1,7 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from datetime import datetime
+import psutil
+import os
 
 from src.services.queue_manager import queue_manager
 from src.models.job import JobUpdate
@@ -198,4 +200,136 @@ async def cleanup_jobs(hours_old: int = None):
             "status": "error",
             "error": str(e),
             "message": "Failed to cleanup jobs"
+        }
+
+
+@router.get("/processing_activity")
+async def get_processing_activity():
+    """
+    Get current CPU activity for monitoring abandoned jobs.
+    Returns overall system CPU usage and process-specific metrics.
+    """
+    try:
+        # Get current process info
+        current_process = psutil.Process()
+        
+        # Get system-wide CPU usage (1 second interval for accuracy)
+        system_cpu_percent = psutil.cpu_percent(interval=1)
+        
+        # Get process-specific CPU usage
+        process_cpu_percent = current_process.cpu_percent()
+        
+        # Get memory usage
+        memory_info = current_process.memory_info()
+        memory_percent = current_process.memory_percent()
+        
+        # Get running jobs count
+        jobs_data = queue_manager.get_all_jobs()
+        processing_jobs = [j for j in jobs_data.values() if j.get('status') == 'processing']
+        
+        # Get worker info
+        worker_info = queue_manager.get_worker_info()
+        
+        # Check if we're actually processing (high CPU + active jobs)
+        is_actively_processing = (
+            system_cpu_percent > 10 or 
+            process_cpu_percent > 5 or 
+            len(processing_jobs) > 0
+        )
+        
+        return {
+            "status": "success",
+            "timestamp": datetime.utcnow().isoformat(),
+            "cpu_activity": {
+                "system_cpu_percent": round(system_cpu_percent, 2),
+                "process_cpu_percent": round(process_cpu_percent, 2),
+                "is_actively_processing": is_actively_processing
+            },
+            "memory_usage": {
+                "memory_mb": round(memory_info.rss / 1024 / 1024, 2),
+                "memory_percent": round(memory_percent, 2)
+            },
+            "job_activity": {
+                "total_jobs": len(jobs_data),
+                "processing_jobs": len(processing_jobs),
+                "processing_job_ids": [j.get('id') for j in processing_jobs]
+            },
+            "worker_info": {
+                "worker_id": worker_info.get("worker_id"),
+                "worker_name": worker_info.get("worker_name"),
+                "num_threads": worker_info.get("num_threads"),
+                "deployment_id": queue_manager.deployment_id
+            }
+        }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "message": "Failed to get processing activity",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+
+
+@router.post("/jobs/{job_id}/force_close")
+async def force_close_job(job_id: str, reason: str = Query(default="Abandoned job - low CPU activity")):
+    """
+    Force close a job that appears to be abandoned.
+    This sets the job status to 'failed' with an abandonment reason.
+    """
+    try:
+        # Get the job first
+        job_data = queue_manager.get_job(job_id)
+        if not job_data:
+            raise HTTPException(status_code=404, detail="Job not found")
+        
+        current_status = job_data.get("status")
+        
+        # Only allow force closing jobs that are processing or queued
+        if current_status not in ["processing", "queued", "started"]:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Cannot force close job with status '{current_status}'. Only processing/queued/started jobs can be force closed."
+            )
+        
+        # Update job status to failed with abandonment reason
+        error_message = f"Job force closed: {reason}"
+        queue_manager.update_job_status(
+            job_id=job_id,
+            status="failed",
+            active=False,
+            waiting=False,
+            error=error_message
+        )
+        
+        return {
+            "status": "success",
+            "job_id": job_id,
+            "message": f"Job {job_id} has been force closed",
+            "reason": reason,
+            "previous_status": current_status,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error force closing job: {str(e)}")
+
+
+@router.get("/deployment_info")
+async def get_deployment_info():
+    """Get deployment information including container-level deployment ID"""
+    try:
+        deployment_info = queue_manager.get_deployment_info()
+        return {
+            "status": "success",
+            "deployment_info": deployment_info,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "message": "Failed to get deployment info"
         }
