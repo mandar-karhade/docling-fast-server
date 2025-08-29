@@ -182,9 +182,12 @@ class QueueManager:
     def _cleanup_redis_keys_for_job(self, job_id: str):
         """Remove all possible Redis keys for a job from any deployment"""
         try:
-            if not self.redis_conn:
+            # Use the job store's Redis connection
+            if not hasattr(self.job_store, 'redis_client') or not self.job_store.redis_client:
                 print(f"⚠️  No Redis connection available for cleanup")
                 return
+            
+            redis_client = self.job_store.redis_client
             
             # Try to delete common Redis key patterns for this job
             # We'll try different deployment prefixes since we don't know which one the job came from
@@ -219,7 +222,7 @@ class QueueManager:
             deleted_keys = 0
             for key in redis_keys_to_delete:
                 try:
-                    result = self.redis_conn.delete(key)
+                    result = redis_client.delete(key)
                     if result and result > 0:
                         deleted_keys += 1
                         print(f"🗑️ Deleted Redis key: {key}")
@@ -238,9 +241,12 @@ class QueueManager:
     def _cleanup_old_deployment_keys_from_redis(self):
         """Clean up Redis keys from old deployments on startup"""
         try:
-            if not self.redis_conn:
+            # Use the job store's Redis connection
+            if not hasattr(self.job_store, 'redis_client') or not self.job_store.redis_client:
                 print("📝 No Redis connection for deployment cleanup")
                 return
+            
+            redis_client = self.job_store.redis_client
             
             print("🧹 Cleaning up old deployment keys from Redis...")
             
