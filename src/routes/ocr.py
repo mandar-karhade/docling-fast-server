@@ -100,6 +100,9 @@ async def process_pdf_ocr_async(file: UploadFile = File(...), request_id: str | 
             "message": "PDF processing queued. Use /jobs/{job_id} to check status."
         }
         
+    except HTTPException:
+        # Propagate intended HTTP errors (e.g., 409 duplicate)
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to queue job: {str(e)}")
 
