@@ -5,8 +5,9 @@ from pathlib import Path
 from datetime import datetime
 import json
 from src.services.pdf_processor import pdf_processor
+from typing import Optional, Any
 
-def process_pdf_task(pdf_data: bytes, filename: str):
+def process_pdf_task(pdf_data: bytes, filename: str, file_hash: Optional[str] = None, **_extra_kwargs: Any):
     """
     Task to process PDF asynchronously (compatible with simulated queue system)
     """
