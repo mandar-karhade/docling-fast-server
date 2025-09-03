@@ -70,6 +70,15 @@ async def process_pdf_ocr_async(file: UploadFile = File(...), request_id: str | 
         
         # Submit job to RQ queue
         from src.services.rq_tasks import process_pdf_task
+        # If client provided a request_id, check for existing active job and reject duplicates
+        if request_id:
+            existing = queue_manager.find_duplicate_job(request_id)
+            if existing:
+                raise HTTPException(status_code=409, detail={
+                    "message": "duplicate request_id",
+                    "job_id": existing
+                })
+
         enqueue_kwargs = dict(
             job_timeout='1h',
             result_ttl=3600,
