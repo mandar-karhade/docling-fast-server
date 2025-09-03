@@ -8,7 +8,7 @@ echo "🚀 Starting Docling CPU API with in-memory job storage..."
 # Environment variables (some optional, some required)
 
 # Set defaults for optional environment variables
-export UVICORN_WORKERS=${UVICORN_WORKERS:-4}
+export UVICORN_WORKERS=${UVICORN_WORKERS:-1}
 export OMP_NUM_THREADS=${OMP_NUM_THREADS:-1}
 
 # OPENAI_API_KEY is optional but recommended for enhanced processing
