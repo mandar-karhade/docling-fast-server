@@ -4,7 +4,7 @@ services:
     env_file:
       - env.local
     ports:
-      - "8850:8000"
+      - "8000:8000"
 
     volumes:
       - workspace_data:/home/appuser/.EasyOCR
