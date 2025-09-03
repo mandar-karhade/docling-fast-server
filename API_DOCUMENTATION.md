@@ -6,6 +6,46 @@
 - **Deployment**: Docker containerized, designed for RunPod.io
 - **Queue Management**: In-memory ThreadPoolExecutor with file-based persistence for multi-worker environments
 
+## Quick Reference: /ocr/async
+
+### POST /ocr/async
+- **Content-Type**: multipart/form-data
+- **Fields**:
+  - **file**: PDF file (required)
+  - **request_id**: string (optional, recommended). If provided, enables dedupe across concurrent requests; duplicates return 409 with the existing job_id.
+
+### Responses
+- **200 OK** (accepted and queued):
+```json
+{ "status": "accepted", "job_id": "<id>", "message": "PDF processing queued. Use /jobs/{job_id} to check status." }
+```
+- **409 Conflict** (duplicate request_id still active):
+```json
+{ "detail": { "message": "duplicate request_id", "job_id": "<existing_id>" } }
+```
+- **5xx**: Unexpected server error during enqueue
+
+### Poll job status
+- **GET /jobs/{job_id}** → returns `status` in [queued, started, finished, failed] and result when finished.
+
+### Example (curl)
+```bash
+# submit
+curl -sS -X POST \
+  -F "file=@/path/to/doc.pdf" \
+  -F "request_id=REQ-123" \
+  http://<host>:8000/ocr/async | jq '.'
+
+# duplicate (returns 409 with existing job_id)
+curl -sS -X POST -w "\n%{http_code}\n" \
+  -F "file=@/path/to/doc.pdf" \
+  -F "request_id=REQ-123" \
+  http://<host>:8000/ocr/async | jq '.'
+
+# poll
+curl -sS http://<host>:8000/jobs/<job_id> | jq '.'
+```
+
 ## Core Endpoints
 
 ### 1. Health & Status
