@@ -1,7 +1,7 @@
 import tempfile
 import shutil
 from pathlib import Path
-from fastapi import APIRouter, File, UploadFile, HTTPException
+from fastapi import APIRouter, File, UploadFile, HTTPException, Form
 
 from src.services.pdf_processor import pdf_processor
 from src.services.queue_manager import queue_manager
@@ -59,7 +59,7 @@ async def process_pdf_ocr(file: UploadFile = File(...)):
 
 
 @router.post("/ocr/async")
-async def process_pdf_ocr_async(file: UploadFile = File(...)):
+async def process_pdf_ocr_async(file: UploadFile = File(...), request_id: str | None = Form(default=None)):
     """Process PDF file asynchronously using RQ and return RQ job ID"""
     if not file.filename.lower().endswith('.pdf'):
         raise HTTPException(status_code=400, detail="File must be a PDF")
@@ -70,13 +70,19 @@ async def process_pdf_ocr_async(file: UploadFile = File(...)):
         
         # Submit job to RQ queue
         from src.services.rq_tasks import process_pdf_task
+        enqueue_kwargs = dict(
+            job_timeout='1h',
+            result_ttl=3600,
+            failure_ttl=3600,
+        )
+        if request_id:
+            enqueue_kwargs['file_hash'] = request_id
+
         rq_job = queue_manager.enqueue_job(
             process_pdf_task,
-            file_content,  # First positional argument: PDF data
-            file.filename,  # Second positional argument: filename
-            job_timeout='1h',  # 1 hour timeout
-            result_ttl=3600,   # Keep result for 1 hour
-            failure_ttl=3600   # Keep failed jobs for 1 hour
+            file_content,
+            file.filename,
+            **enqueue_kwargs,
         )
         
         return {
