@@ -63,6 +63,9 @@ class QueueManager:
         print(f"✅ Queue Manager initialized with deployment ID: {self.deployment_id}")
         print(f"🔧 Using queue prefix: {self.queue_prefix}")
 
+        # Queue control
+        self.paused = False
+
     def _cleanup_old_queues(self):
         """Clean up old queue data from previous deployments"""
         try:
@@ -104,6 +107,20 @@ class QueueManager:
             "created_at": datetime.utcnow().isoformat(),
             "max_workers": self.max_workers
         }
+
+    def pause_queue(self) -> None:
+        """Pause accepting new jobs"""
+        self.paused = True
+        print("⏸️ Queue paused: new jobs will be rejected")
+
+    def resume_queue(self) -> None:
+        """Resume accepting new jobs"""
+        self.paused = False
+        print("▶️ Queue resumed: accepting new jobs")
+
+    def is_paused(self) -> bool:
+        """Check if queue is paused"""
+        return self.paused
     
     def is_valid_job_id_for_deployment(self, job_id: str, cleanup_if_invalid: bool = True) -> bool:
         """Check if job ID belongs to current deployment and optionally clean up invalid ones"""
@@ -887,7 +904,8 @@ class QueueManager:
                 "queue_stats": queue_stats,
                 "workers": workers,
                 "recent_jobs": recent_jobs,
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.utcnow().isoformat(),
+                "paused": self.paused
             }
         except Exception as e:
             return {
@@ -895,6 +913,20 @@ class QueueManager:
                 "error": str(e),
                 "message": "Failed to get queue status"
             }
+
+    def find_duplicate_job(self, file_hash: str) -> Optional[str]:
+        """Find an existing non-terminal job with the same file hash"""
+        try:
+            if not file_hash:
+                return None
+            # Check current in-memory index first
+            for job_id, job in self.get_all_jobs().items():
+                status = job.get('status')
+                if job.get('file_hash') == file_hash and status in {"queued", "processing", "waiting", "started"}:
+                    return job_id
+            return None
+        except Exception:
+            return None
 
     def get_rq_job(self, job_id: str):
         """Get job by ID (simulated since RQ doesn't work with HTTP Redis)"""
@@ -906,6 +938,22 @@ class QueueManager:
         import threading
         import time
         
+        # Do not accept new jobs when paused
+        if self.paused:
+            print("⏸️ Rejecting enqueue: queue is paused")
+            raise RuntimeError("Queue is paused")
+
+        # Optional duplicate protection by file hash
+        dedupe_hash = kwargs.get('file_hash')
+        if dedupe_hash:
+            existing = self.find_duplicate_job(dedupe_hash)
+            if existing:
+                print(f"🛑 Duplicate job detected for hash {dedupe_hash}, existing job {existing}")
+                class MockJob:
+                    def __init__(self, job_id):
+                        self.id = job_id
+                return MockJob(existing)
+
         # Generate a job ID with deployment prefix
         base_job_id = str(uuid.uuid4())
         job_id = f"{self.deployment_id}-{base_job_id}"
@@ -913,7 +961,7 @@ class QueueManager:
         # Filter out RQ-specific kwargs that shouldn't be passed to the task function
         rq_kwargs = {
             'job_timeout', 'result_ttl', 'failure_ttl', 'job_id', 'depends_on',
-            'timeout', 'retry', 'meta', 'description', 'at', 'in'
+            'timeout', 'retry', 'meta', 'description', 'at', 'in', 'file_hash'
         }
         task_kwargs = {k: v for k, v in kwargs.items() if k not in rq_kwargs}
         
@@ -930,7 +978,8 @@ class QueueManager:
             "logs": [],
             "active": False,
             "waiting": True,
-            "filename": args[1] if len(args) > 1 else "Unknown"  # Store filename for easier access
+            "filename": args[1] if len(args) > 1 else "Unknown",  # Store filename for easier access
+            "file_hash": dedupe_hash or task_kwargs.get('file_hash')
         }
         
         # Save job to memory store
