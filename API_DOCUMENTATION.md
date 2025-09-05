@@ -20,6 +20,20 @@
 ```json
 { "job_id": "<id>" }
 ```
+
+### Examples: /ocr
+```bash
+# Default pipeline (auto-fallback may switch to limited on specific error)
+curl -sS -X POST \
+  -F "file=@/path/to/doc.pdf" \
+  http://<host>:8000/ocr | jq '{status, filename, conversion_method, files: (.files | keys)}'
+
+# Force limited pipeline only
+curl -sS -X POST \
+  -F "file=@/path/to/doc.pdf" \
+  -F "conversion_method=limited" \
+  http://<host>:8000/ocr | jq '{status, filename, conversion_method, files: (.files | keys)}'
+```
 - **409 Conflict** (duplicate job_id/request_id):
 ```json
 { "job_id": "<existing_id>" }
@@ -62,15 +76,25 @@ curl -sS http://<host>:8000/jobs/<job_id> | jq '.'
 
 #### Synchronous Processing
 - **`POST /ocr`** - Immediate PDF processing
-  - **Input**: `multipart/form-data` with `file` field (PDF)
-  - **Output**: Compressed JSON with multiple formats:
+  - **Input**: `multipart/form-data`
+    - `file` (required): PDF file
+    - `conversion_method` (optional): `"default"` (default) or `"limited"`
+      - `default`: run full pipeline; on a specific transformers image-size error, server auto-retries with limited pipeline
+      - `limited`: run limited pipeline only (tables/code/formula/picture disabled; no remote services)
+  - **Output**:
     ```json
     {
+      "status": "success",
       "filename": "document.pdf",
-      "doctags": {...},      // Docling doctags format
-      "json": {...},         // Docling JSON format
-      "markdown": "...",     // Markdown with embedded images
-      "html": "..."          // HTML with embedded images
+      "conversion_method": "default" | "limited",
+      "files": {
+        "filename": "document",
+        "doctags": { },
+        "json": { },
+        "markdown": "...",
+        "html": "...",
+        "chunks": { }
+      }
     }
     ```
   - **Processing Time**: 10-30 seconds depending on PDF complexity
