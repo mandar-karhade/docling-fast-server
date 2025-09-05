@@ -6,12 +6,17 @@ from fastapi.responses import JSONResponse
 
 from src.services.pdf_processor import pdf_processor
 from src.services.queue_manager import queue_manager
+from docling.document_converter import DocumentConverter, PdfFormatOption
+from docling.datamodel.base_models import InputFormat
 
 router = APIRouter()
 
 
 @router.post("/ocr")
-async def process_pdf_ocr(file: UploadFile = File(...)):
+async def process_pdf_ocr(
+    file: UploadFile = File(...),
+    conversion_method: str = Form(default="default"),
+):
     """Process PDF file and return zip with OCR results"""
     if not file.filename.lower().endswith('.pdf'):
         raise HTTPException(status_code=400, detail="File must be a PDF")
@@ -26,8 +31,24 @@ async def process_pdf_ocr(file: UploadFile = File(...)):
         with open(pdf_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
         
-        # Process the PDF
-        doc = pdf_processor.process_pdf(pdf_path)
+        # Respect requested conversion method (default vs limited)
+        method = conversion_method.strip().lower() if conversion_method else "default"
+        if method not in {"default", "limited"}:
+            raise HTTPException(status_code=400, detail="conversion_method must be 'default' or 'limited'")
+
+        if method == "limited":
+            # Run limited pipeline only
+            options = pdf_processor.get_pdf_pipeline_options_limited()
+            converter = DocumentConverter(
+                format_options={
+                    InputFormat.PDF: PdfFormatOption(pipeline_options=options)
+                }
+            )
+            result = converter.convert(pdf_path)
+            doc = result.document
+        else:
+            # Default path (includes internal fallback on specific error)
+            doc, method = pdf_processor.process_pdf(pdf_path)
         
         # Generate results directly from document
         pdf_stem = pdf_path.stem
@@ -44,7 +65,8 @@ async def process_pdf_ocr(file: UploadFile = File(...)):
             return {
                 "status": "success",
                 "filename": file.filename,
-                "files": results
+                "conversion_method": method,
+                "files": results,
             }
         else:
             # Clean up on failure

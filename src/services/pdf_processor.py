@@ -141,24 +141,64 @@ class PDFProcessor:
             generate_picture_images = True,
         )
 
-    def process_pdf(self, pdf_path: Path) -> Dict[str, Any]:
-        """Process PDF using locally installed docling with the same options"""
-        print(f"📄 Processing {pdf_path.name} with local docling")
-        
-        # Create document converter with PDF format options
-        doc_converter = DocumentConverter(
-            format_options={
-                InputFormat.PDF: PdfFormatOption(
-                    pipeline_options=self.get_pdf_pipeline_options(),
-                )
-            }
+    def get_pdf_pipeline_options_limited(self) -> PdfPipelineOptions:
+        """Limited pipeline options with enrichment features disabled (for fallback tests)."""
+        return PdfPipelineOptions(
+            # Accelerator options
+            accelerator_options=self.get_accelerator_options(),
+
+            # OCR options
+            do_ocr=True,
+            force_ocr=False,
+            ocr_options=self.get_ocr_options(),
+
+            # Disable enrichment features
+            table_mode="accurate",
+            include_images=True,
+            do_table_structure=False,
+            do_code_enrichment=False,
+            do_formula_enrichment=False,
+            do_picture_classification=False,
+
+            # Disable picture description and any remote services
+            do_picture_description=False,
+            enable_remote_services=False,
         )
-        
-        print("🚀 Starting document conversion...")
-        
-        # Convert the document
-        result = doc_converter.convert(pdf_path)
-        return result.document
+
+    def process_pdf(self, pdf_path: Path):
+        """Process PDF with default options; on idefics3 size error, retry with limited features.
+
+        Returns a tuple: (docling_document, conversion_method) where conversion_method is
+        "default" or "limited".
+        """
+        print(f"📄 Processing {pdf_path.name} with local docling")
+
+        def build_converter(options: PdfPipelineOptions) -> DocumentConverter:
+            return DocumentConverter(
+                format_options={
+                    InputFormat.PDF: PdfFormatOption(
+                        pipeline_options=options,
+                    )
+                }
+            )
+
+        # Attempt with default options
+        default_opts = self.get_pdf_pipeline_options()
+        print("🚀 Starting document conversion (default)...")
+        try:
+            result = build_converter(default_opts).convert(pdf_path)
+            return result.document, "default"
+        except Exception as e:
+            msg = str(e)
+            print(f"⚠️ Default conversion failed: {msg}")
+            # Specific fallback for transformers image size constraint
+            if ("resolution_max_side" in msg) and ("max_image_size" in msg):
+                print("🔁 Retrying with limited pipeline features (tables/code/formula/pictures disabled)...")
+                limited_opts = self.get_pdf_pipeline_options_limited()
+                result = build_converter(limited_opts).convert(pdf_path)
+                return result.document, "limited"
+            # Propagate other errors
+            raise
 
     def get_output(self, doc, pdf_stem: str, suffix: str) -> Dict[str, Any]:
         """Create results object from docling document without saving files"""
@@ -208,8 +248,8 @@ class PDFProcessor:
             # Process the PDF in a thread pool since process_pdf is blocking
             queue_manager.update_job(job_id, JobUpdate(), "Starting document conversion in thread pool")
             loop = asyncio.get_event_loop()
-            doc = await loop.run_in_executor(None, self.process_pdf, pdf_path)
-            queue_manager.update_job(job_id, JobUpdate(), "Document conversion completed")
+            doc, method = await loop.run_in_executor(None, self.process_pdf, pdf_path)
+            queue_manager.update_job(job_id, JobUpdate(), f"Document conversion completed (method={method})")
             
             # Generate results
             queue_manager.update_job(job_id, JobUpdate(), "Generating output formats")
@@ -221,6 +261,7 @@ class PDFProcessor:
                 result_data = {
                     "status": "success",
                     "filename": pdf_path.name,
+                    "conversion_method": method,
                     "files": results
                 }
                 update = JobUpdate(status="completed", active=False, waiting=False, result=result_data)

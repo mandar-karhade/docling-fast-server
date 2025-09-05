@@ -488,7 +488,11 @@ class WarmupService:
                 try:
                     # Process the file directly (this will download models on first use)
                     temp_dir = Path(tempfile.mkdtemp())
-                    doc = pdf_processor.process_pdf(test_file)
+                    result = pdf_processor.process_pdf(test_file)
+                    if isinstance(result, tuple):
+                        doc, method = result
+                    else:
+                        doc, method = result, "default"
                     
                     # Generate results to test output functionality
                     results = pdf_processor.get_output(doc, test_file.stem, "warmup")
@@ -496,7 +500,7 @@ class WarmupService:
                     if results and isinstance(results, dict):
                         # Show result keys like jq would
                         result_keys = list(results.keys())
-                        print(f"📋 Container Test {i}: Direct Processing >> successful {test_file.name}")
+                        print(f"📋 Container Test {i}: Direct Processing >> successful {test_file.name} (method={method})")
                         print(f"📋 Container Test {i} results >> {test_file.name}: {result_keys}")
                         
                         # Show some size info
