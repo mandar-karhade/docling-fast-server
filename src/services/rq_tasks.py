@@ -23,7 +23,8 @@ def process_pdf_task(pdf_data: bytes, filename: str, file_hash: Optional[str] = 
         
         # Process the PDF
         print(f"📄 Processing {filename} in async task")
-        doc = pdf_processor.process_pdf(pdf_path)
+        # process_pdf returns a tuple: (doc, method)
+        doc, method = pdf_processor.process_pdf(pdf_path)
         
         # Generate results
         pdf_stem = pdf_path.stem
@@ -34,6 +35,7 @@ def process_pdf_task(pdf_data: bytes, filename: str, file_hash: Optional[str] = 
             return {
                 "status": "success",
                 "filename": filename,
+                "conversion_method": method,
                 "files": results
             }
         else:

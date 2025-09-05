@@ -16,7 +16,7 @@
   - **request_id**: string (optional, deprecated alias for `job_id`). Same behavior as `job_id`.
 
 ### Responses
-- **200 OK**:
+- **200 OK** (submit):
 ```json
 { "job_id": "<id>" }
 ```
@@ -41,7 +41,29 @@ curl -sS -X POST \
 - **5xx**: Unexpected server error during enqueue
 
 ### Poll job status
-- **GET /jobs/{job_id}** → returns `status` in [queued, started, finished, failed] and result when finished.
+- **GET /jobs/{job_id}** → returns `status` in [queued, started, finished, failed] and `result` when finished.
+- When `status` is `finished`, the `result` mirrors the synchronous `/ocr` output including `conversion_method` and `files`.
+
+Example finished job response (truncated):
+```json
+{
+  "job_id": "<id>",
+  "status": "finished",
+  "result": {
+    "status": "success",
+    "filename": "document.pdf",
+    "conversion_method": "default",
+    "files": {
+      "filename": "document",
+      "doctags": { },
+      "json": { },
+      "markdown": "...",
+      "html": "...",
+      "chunks": { }
+    }
+  }
+}
+```
 
 ### Example (curl)
 ```bash
