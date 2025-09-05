@@ -12,16 +12,17 @@
 - **Content-Type**: multipart/form-data
 - **Fields**:
   - **file**: PDF file (required)
-  - **request_id**: string (optional, recommended). If provided, enables dedupe across concurrent requests; duplicates return 409 with the existing job_id.
+  - **job_id**: string (optional). If provided, used as the canonical identifier; if it already exists, returns 409 with `{ "job_id": <value> }`.
+  - **request_id**: string (optional, deprecated alias for `job_id`). Same behavior as `job_id`.
 
 ### Responses
-- **200 OK** (accepted and queued):
+- **200 OK**:
 ```json
-{ "status": "accepted", "job_id": "<id>", "message": "PDF processing queued. Use /jobs/{job_id} to check status." }
+{ "job_id": "<id>" }
 ```
-- **409 Conflict** (duplicate request_id still active):
+- **409 Conflict** (duplicate job_id/request_id):
 ```json
-{ "detail": { "message": "duplicate request_id", "job_id": "<existing_id>" } }
+{ "job_id": "<existing_id>" }
 ```
 - **5xx**: Unexpected server error during enqueue
 
@@ -77,9 +78,9 @@ curl -sS http://<host>:8000/jobs/<job_id> | jq '.'
 
 #### Asynchronous Processing
 - **`POST /ocr/async`** - Queue-based PDF processing
-  - **Input**: `multipart/form-data` with `file` field (PDF)
-  - **Output**: `{"job_id": "uuid", "status": "submitted"}`
-  - **Behavior**: Returns immediately with job ID
+  - **Input**: `multipart/form-data` with `file` field (PDF); optional `job_id` (or deprecated `request_id`)
+  - **Output**: `{ "job_id": "<id>" }`
+  - **Behavior**: Returns immediately with job ID (echoes provided `job_id`/`request_id` if supplied)
 
 ### 3. Job Management
 - **`GET /jobs/{job_id}`** - Get specific job status and results

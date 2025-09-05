@@ -954,9 +954,14 @@ class QueueManager:
                         self.id = job_id
                 return MockJob(existing)
 
-        # Generate a job ID with deployment prefix
-        base_job_id = str(uuid.uuid4())
-        job_id = f"{self.deployment_id}-{base_job_id}"
+        # Determine job_id: honor client-provided one if present, else generate
+        provided_job_id = kwargs.get('job_id')
+        if provided_job_id:
+            # Honor client-provided job_id verbatim (canonical identifier)
+            job_id = provided_job_id
+        else:
+            base_job_id = str(uuid.uuid4())
+            job_id = f"{self.deployment_id}-{base_job_id}"
         
         # Filter out RQ-specific kwargs that shouldn't be passed to the task function
         rq_kwargs = {

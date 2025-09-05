@@ -2,6 +2,7 @@ import tempfile
 import shutil
 from pathlib import Path
 from fastapi import APIRouter, File, UploadFile, HTTPException, Form
+from fastapi.responses import JSONResponse
 
 from src.services.pdf_processor import pdf_processor
 from src.services.queue_manager import queue_manager
@@ -59,33 +60,39 @@ async def process_pdf_ocr(file: UploadFile = File(...)):
 
 
 @router.post("/ocr/async")
-async def process_pdf_ocr_async(file: UploadFile = File(...), request_id: str | None = Form(default=None)):
+async def process_pdf_ocr_async(
+    file: UploadFile = File(...),
+    job_id: str | None = Form(default=None),
+    request_id: str | None = Form(default=None),
+):
     """Process PDF file asynchronously using RQ and return RQ job ID"""
     if not file.filename.lower().endswith('.pdf'):
         raise HTTPException(status_code=400, detail="File must be a PDF")
     
     try:
+        # Determine canonical job_id (request_id is deprecated alias)
+        client_job_id = job_id or request_id
+
+        # If client provided a job_id (or alias), enforce uniqueness and use it
+        if client_job_id:
+            # Check existence irrespective of deployment by asking the job store directly
+            existing = queue_manager.job_store.get_job(client_job_id)
+            if existing:
+                return JSONResponse(status_code=409, content={"job_id": client_job_id})
+
         # Read file content
         file_content = await file.read()
-        
-        # Submit job to RQ queue
+
+        # Submit job to queue
         from src.services.rq_tasks import process_pdf_task
-        # If client provided a request_id, check for existing active job and reject duplicates
-        if request_id:
-            existing = queue_manager.find_duplicate_job(request_id)
-            if existing:
-                raise HTTPException(status_code=409, detail={
-                    "message": "duplicate request_id",
-                    "job_id": existing
-                })
 
         enqueue_kwargs = dict(
             job_timeout='1h',
             result_ttl=3600,
             failure_ttl=3600,
         )
-        if request_id:
-            enqueue_kwargs['file_hash'] = request_id
+        if client_job_id:
+            enqueue_kwargs['job_id'] = client_job_id
 
         rq_job = queue_manager.enqueue_job(
             process_pdf_task,
@@ -93,12 +100,8 @@ async def process_pdf_ocr_async(file: UploadFile = File(...), request_id: str | 
             file.filename,
             **enqueue_kwargs,
         )
-        
-        return {
-            "status": "accepted",
-            "job_id": rq_job.id,  # Use RQ job ID as primary identifier
-            "message": "PDF processing queued. Use /jobs/{job_id} to check status."
-        }
+
+        return {"job_id": rq_job.id}
         
     except HTTPException:
         # Propagate intended HTTP errors (e.g., 409 duplicate)

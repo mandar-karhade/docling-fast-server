@@ -22,7 +22,7 @@ echo "📊 Configuration:"
 echo "   OMP_NUM_THREADS: $OMP_NUM_THREADS"
 echo "   OPENBLAS_NUM_THREADS: $OPENBLAS_NUM_THREADS"
 echo "   MKL_NUM_THREADS: $MKL_NUM_THREADS"
-echo "   UVICORN_WORKERS: $UVICORN_WORKERS"
+echo "   UVICORN_WORKERS: $UVICORN_WORKERS"ty it
 echo "   CPU_LIMIT: ${CPU_LIMIT:-not set}"
 echo "   MEMORY_LIMIT: ${MEMORY_LIMIT:-not set}"
 if [ -n "$OPENAI_API_KEY" ]; then
